@@ -2,7 +2,7 @@ import { forwardRef } from 'react';
 import { Pressable, Text, View, StyleSheet } from 'react-native';
 import type { TabTriggerSlotProps } from 'expo-router/ui';
 import { TabList, TabSlot, TabTrigger, Tabs } from 'expo-router/ui';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MiniPlayer } from '@/components';
 import { colors, font, spacing } from '@/theme/tokens';
 
@@ -19,21 +19,20 @@ const TABS = [
  * Na fase visual basta trocar a aparência de <TabTrigger> (ícones, animações).
  */
 export default function TabsLayout() {
+  const insets = useSafeAreaInsets();
+  // IMPORTANTE: o expo-router só descobre as rotas se <TabList> for filho DIRETO de <Tabs>
+  // (não pode estar dentro de View/SafeAreaView), por isso o layout é feito via estilos.
   return (
-    <Tabs>
-      <View style={{ flex: 1, backgroundColor: colors.bg }}>
-        <TabSlot style={{ flex: 1 }} />
-        <MiniPlayer />
-        <SafeAreaView edges={['bottom']} style={s.barWrap}>
-          <TabList style={s.bar}>
-            {TABS.map((t) => (
-              <TabTrigger key={t.name} name={t.name} href={t.href} asChild>
-                <TabButton label={t.label} />
-              </TabTrigger>
-            ))}
-          </TabList>
-        </SafeAreaView>
-      </View>
+    <Tabs style={{ flex: 1, backgroundColor: colors.bg }}>
+      <TabSlot style={{ flex: 1 }} />
+      <MiniPlayer />
+      <TabList style={[s.bar, { paddingBottom: insets.bottom }]}>
+        {TABS.map((t) => (
+          <TabTrigger key={t.name} name={t.name} href={t.href} asChild>
+            <TabButton label={t.label} />
+          </TabTrigger>
+        ))}
+      </TabList>
     </Tabs>
   );
 }
@@ -49,8 +48,7 @@ const TabButton = forwardRef<View, TabTriggerSlotProps & { label: string }>(
 TabButton.displayName = 'TabButton';
 
 const s = StyleSheet.create({
-  barWrap: { backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
-  bar: { flexDirection: 'row' },
+  bar: { flexDirection: 'row', backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   trigger: { flex: 1, alignItems: 'center', paddingVertical: spacing.md },
   label: { color: colors.textMuted, fontSize: font.sm, fontWeight: '600' },
 });
