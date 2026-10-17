@@ -80,13 +80,13 @@ npm install
 npm run dev
 ```
 
-O servidor escuta na porta `4000` por padrão. Pode ainda escolher outra porta. Para iniciar em modo normal, use
+O servidor escuta na porta `4000` por padrão. Pode ainda escolher outra porta, alterando a variável PORT. Para iniciar em modo normal, use
 `npm start`.
 
 O app não vem com um servidor de áudio predefinido. Na primeira abertura, ele
 mostra um aviso para configurar o endereço em **Ajustes → Servidor de áudio**.
 Inicie sua própria cópia do backend e informe o respectivo endereço. 
-em um dispositivo físico, use o endereço local do
+Em um dispositivo físico, use o endereço local do
 computador e conecte ambos à mesma rede. Esses valores são instruções de
 configuração e não vêm preenchidos no app ou no build.
 
