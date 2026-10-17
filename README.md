@@ -27,7 +27,7 @@ no Expo Go.
 
 ## Como funciona o backend
 
-O servidor de áudio está em [`Backend/`](./Backend/). Ele é uma API Node.js
+O servidor de áudio está em [`backend/`](./backend/). Ele é uma API Node.js
 independente, não um servidor de contas ou de biblioteca. O app envia o ID de
 uma faixa; o servidor usa `yt-dlp` para resolver uma URL de áudio disponível e
 encaminha a resposta do YouTube CDN ao player.
@@ -75,7 +75,7 @@ encaminham os comandos `start`, `android`, `ios`, `test` e `typecheck` para
 Requer Node.js 22 ou superior. Em outro terminal, na raiz do repositório:
 
 ```powershell
-cd Backend
+cd backend
 npm install
 npm run dev
 ```
@@ -107,7 +107,7 @@ distribuído sob licença MIT; os créditos e avisos de licença estão em
 
 O servidor incluído existe para desenvolvimento e experimentação neste projeto;
 não é uma oferta de hospedagem ou um serviço público para uso comercial. Quem
-quiser usar a API deve **copiar o diretório `Backend/` para seu próprio ambiente,
+quiser usar a API deve **copiar o diretório `backend/` para seu próprio ambiente,
 instalá-lo e iniciá-lo localmente**, ou em infraestrutura sob seu próprio
 controle. Não dependa de uma instância hospedada por outra pessoa.
 
@@ -129,7 +129,7 @@ npm test
 npm run typecheck
 
 # API: testes do servidor
-cd ..\Backend
+cd ..\backend
 npm test
 ```
 
@@ -141,7 +141,7 @@ npm test
 - `frontend/src/services/catalog/` — busca e integração com o catálogo.
 - `frontend/src/services/audio/` — fila, controle e serviço de reprodução.
 - `frontend/src/database/` — banco SQLite, migrações e repositórios.
-- `Backend/` — API Node.js para resolver e encaminhar áudio.
+- `backend/` — API Node.js para resolver e encaminhar áudio.
 - `frontend/THIRD_PARTY_NOTICES.md` — créditos e licenças de terceiros.
 
 Para detalhes de arquitetura, consulte
