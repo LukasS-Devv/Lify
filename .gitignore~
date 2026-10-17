@@ -1,0 +1,15 @@
+node_modules/
+.expo/
+dist/
+web-build/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+/android/
+/ios/
+/functions/node_modules
+!/functions/node_modules/.package-lock.json
+/backend/node_modules
+/frontend

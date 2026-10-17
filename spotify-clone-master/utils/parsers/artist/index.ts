@@ -1,1 +1,0 @@
-export { parseToArtist } from './parseToArtist';

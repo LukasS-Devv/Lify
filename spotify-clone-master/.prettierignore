@@ -1,7 +1,0 @@
-# Ignore build files
-node_modules/
-android/
-ios/
-build/
-.expo/
-.expo-shared/

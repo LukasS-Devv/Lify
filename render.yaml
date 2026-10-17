@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: lify-stream-api
+    runtime: node
+    rootDir: Backend
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health

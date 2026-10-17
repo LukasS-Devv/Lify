@@ -1,1 +1,0 @@
-export { AnimatedPressable } from './AnimatedPressable';

@@ -1,0 +1,20 @@
+{
+  "name": "lify-stream-api",
+  "private": true,
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --env-file-if-exists=.env index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "youtube-dl-exec": "^3.1.17"
+  },
+  "allowScripts": {
+    "youtube-dl-exec": true
+  }
+}

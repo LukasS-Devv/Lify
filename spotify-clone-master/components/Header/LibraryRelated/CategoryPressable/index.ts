@@ -1,1 +1,0 @@
-export { CategoryPressable } from './CategoryPressable';
