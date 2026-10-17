@@ -2,7 +2,17 @@
 import { Innertube } from 'youtubei.js/react-native';
 import type { Track } from '@/types';
 import { makeTrack } from '@/utils/track';
-import { CatalogError, type CatalogProvider, type StreamInfo } from './types';
+import {
+  CatalogError,
+  type ArtistCollectionItem,
+  type ArtistProfile,
+  type CatalogArtist,
+  type CatalogProvider,
+  type StreamInfo,
+} from './types';
+import { getStreamServerUrl } from './server';
+import { getDb, settingsRepo } from '@/database';
+import { t } from '@/i18n';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -15,7 +25,7 @@ function getClient(): Promise<Innertube> {
       generate_session_locally: true,
     }).catch((e: unknown) => {
       innertube = null;
-      throw new CatalogError('Não foi possível iniciar o cliente do catálogo.', 'network');
+      throw new CatalogError(t('catalog.clientFailed'), 'network');
     });
   }
   return innertube;
@@ -47,8 +57,46 @@ function fromPanelVideo(item: any): Track | null {
   });
 }
 
-// Clientes tentados em ordem: alguns retornam URL direta sem precisar de PO token.
-const STREAM_CLIENTS = ['ANDROID', 'IOS', 'TV'] as const;
+function artistId(item: any): string | undefined {
+  return item?.id
+    ?? item?.channel_id
+    ?? item?.author?.channel_id
+    ?? item?.artists?.[0]?.channel_id
+    ?? item?.endpoint?.payload?.browseId;
+}
+
+function fromArtistResult(item: any): CatalogArtist | null {
+  const id = artistId(item);
+  const name = text(item?.title ?? item?.name ?? item?.author?.name ?? item?.artists?.[0]?.name);
+  if (!id || !name) return null;
+  const thumbnails = item?.thumbnails ?? item?.thumbnail?.contents ?? item?.thumbnail ?? [];
+  return {
+    id,
+    name,
+    subtitle: text(item?.subtitle ?? item?.subscribers ?? item?.description),
+    imageUrl: thumbnails[thumbnails.length - 1]?.url ?? null,
+  };
+}
+
+function fromArtistCollectionItem(item: any): ArtistCollectionItem | null {
+  const id = item?.id ?? item?.endpoint?.payload?.browseId;
+  const title = text(item?.title ?? item?.name);
+  if (!id || !title) return null;
+  const thumbnails = item?.thumbnails ?? item?.thumbnail ?? [];
+  return {
+    id,
+    title,
+    subtitle: text(item?.subtitle ?? item?.year ?? item?.item_count),
+    imageUrl: thumbnails[thumbnails.length - 1]?.url ?? null,
+  };
+}
+
+function sectionTitle(section: any): string {
+  return text(section?.title ?? section?.header?.title)
+    .toLocaleLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
 
 export const youtubeCatalog: CatalogProvider = {
   async search(query) {
@@ -61,7 +109,106 @@ export const youtubeCatalog: CatalogProvider = {
       const tracks = items.map(fromMusicItem).filter((t): t is Track => t !== null);
       return dedupe(tracks);
     } catch (e) {
-      throw new CatalogError('Falha ao buscar músicas. Verifique sua conexão.', 'network');
+      throw new CatalogError(t('catalog.searchFailed'), 'network');
+    }
+  },
+
+  async searchArtists(query) {
+    const q = query.trim();
+    if (!q) return [];
+    const yt = await getClient();
+    try {
+      const res: any = await yt.music.search(q, { type: 'artist' });
+      const items: any[] = res.artists?.contents ?? [];
+      const seen = new Set<string>();
+      return items
+        .map(fromArtistResult)
+        .filter((artist): artist is CatalogArtist => {
+          if (!artist || seen.has(artist.id)) return false;
+          seen.add(artist.id);
+          return true;
+        });
+    } catch {
+      throw new CatalogError(t('artist.searchFailed'), 'network');
+    }
+  },
+
+  async getArtist(id): Promise<ArtistProfile> {
+    if (!id.trim()) throw new CatalogError(t('artist.notFound'), 'parse');
+    const yt = await getClient();
+    try {
+      const page = await yt.music.getArtist(id);
+      const sections: any[] = page.sections;
+      const header: any = page.header;
+      const name = text(header?.title) || t('artist.unknown');
+      const thumbnails = header?.thumbnail?.contents ?? header?.thumbnail ?? [];
+      const artist: CatalogArtist = {
+        id,
+        name,
+        subtitle: '',
+        imageUrl: thumbnails[thumbnails.length - 1]?.url ?? thumbnails[0]?.url ?? null,
+      };
+      const topSongs = sections.find((section) =>
+        /top songs|top tracks|popular songs|mais ouvidas|musicas populares|principais musicas/.test(sectionTitle(section)),
+      );
+      const trackSections = topSongs
+        ? [topSongs]
+        : sections.filter((section) =>
+          (section.contents ?? []).some((item: any) => item?.item_type === 'song' || item?.item_type === 'video'),
+        );
+      const initialTracks = trackSections
+        .flatMap((section) => section.contents ?? [])
+        .map((item: any) => fromMusicItem(item))
+        .filter((track: Track | null): track is Track => track !== null);
+      let allTracks: Track[] | undefined;
+      if (topSongs && sectionTitle(topSongs).includes('top songs')) {
+        try {
+          const allSongsPage = await page.getAllSongs();
+          allTracks = allSongsPage?.contents
+            ?.map((item: any) => fromMusicItem(item))
+            .filter((track: Track | null): track is Track => track !== null);
+        } catch (error) {
+          console.warn('Could not load the complete artist song list.', error);
+        }
+      }
+      const tracks = dedupe(allTracks?.length ? allTracks : initialTracks);
+
+      const albums: ArtistCollectionItem[] = [];
+      const singles: ArtistCollectionItem[] = [];
+      const playlists: ArtistCollectionItem[] = [];
+      const relatedArtists: CatalogArtist[] = [];
+      for (const section of sections) {
+        const title = sectionTitle(section);
+        for (const item of section.contents ?? []) {
+          const itemType = text(item?.item_type ?? item?.endpoint?.payload?.endpointType).toLocaleLowerCase();
+          const isRelatedArtist = itemType.includes('artist')
+            || /related artists|similar artists|fans also like|artists like|artistas relacionados|artistas similares|fas tambem gostam/.test(title);
+          const isPlaylist = itemType.includes('playlist') || /playlists?/.test(title);
+          const collectionItem = fromArtistCollectionItem(item);
+          if (isRelatedArtist) {
+            const artistResult = fromArtistResult(item);
+            if (artistResult) relatedArtists.push(artistResult);
+          } else if (isPlaylist) {
+            if (collectionItem) playlists.push(collectionItem);
+          } else if (/singles?|eps?/.test(title)) {
+            if (collectionItem) singles.push(collectionItem);
+          } else if (/albums?/.test(title) || itemType.includes('album')) {
+            if (collectionItem) albums.push(collectionItem);
+          }
+        }
+      }
+      return {
+        ...artist,
+        description: text(header?.description),
+        tracks,
+        albums: dedupeCollection(albums),
+        singles: dedupeCollection(singles),
+        playlists: dedupeCollection(playlists),
+        relatedArtists: dedupeArtists(relatedArtists),
+      };
+    } catch (e) {
+      if (e instanceof CatalogError) throw e;
+      throw new CatalogError(t('artist.loadFailed'), 'network');
     }
   },
 
@@ -82,31 +229,16 @@ export const youtubeCatalog: CatalogProvider = {
   },
 
   async getStream(track): Promise<StreamInfo> {
-    const yt = await getClient();
-    let lastError: unknown;
-    for (const client of STREAM_CLIENTS) {
-      try {
-        const format: any = await yt.getStreamingData(track.sourceId, {
-          type: 'audio',
-          quality: 'best',
-          format: 'any',
-          client,
-        } as any);
-        if (!format?.url) continue;
-        const expire = Number(new URL(format.url).searchParams.get('expire'));
-        return {
-          url: format.url,
-          mimeType: format.mime_type ?? null,
-          expiresAt: Number.isFinite(expire) && expire > 0 ? expire * 1000 : null,
-        };
-      } catch (e) {
-        lastError = e;
-      }
+    if (!/^[\w-]{11}$/.test(track.sourceId)) {
+      throw new CatalogError(t('catalog.invalidTrackId'), 'parse');
     }
-    throw new CatalogError(
-      `Não foi possível obter o áudio de "${track.title}".` + (lastError instanceof Error ? ` (${lastError.message})` : ''),
-      'unavailable',
-    );
+    const settings = await settingsRepo.loadSettings(await getDb());
+    const baseUrl = getStreamServerUrl(settings);
+    return {
+      url: `${baseUrl}/stream/${encodeURIComponent(track.sourceId)}?profile=${settings.playbackMode}`,
+      mimeType: null,
+      expiresAt: null,
+    };
   },
 
   async getRelated(track) {
@@ -124,4 +256,49 @@ export const youtubeCatalog: CatalogProvider = {
 function dedupe(tracks: Track[]): Track[] {
   const seen = new Set<string>();
   return tracks.filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true)));
+}
+
+function dedupeCollection(items: ArtistCollectionItem[]): ArtistCollectionItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)));
+}
+
+function dedupeArtists(items: CatalogArtist[]): CatalogArtist[] {
+  const seen = new Set<string>();
+  return items.filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)));
+}
+
+/** Lê uma playlist pública do YouTube Music (até 500 faixas, seguindo continuações). */
+export async function getPublicMusicPlaylist(playlistId: string): Promise<{
+  name: string;
+  tracks: Track[];
+  truncated: boolean;
+}> {
+  const yt = await getClient();
+  try {
+    let page: any = await yt.music.getPlaylist(playlistId);
+    const name = text(page.header?.title) || t('catalog.playlistFallback');
+    const tracks: Track[] = [];
+    const seen = new Set<string>();
+    const maxTracks = 500;
+
+    while (true) {
+      for (const item of page.items ?? []) {
+        const track = fromMusicItem(item);
+        if (track && !seen.has(track.id)) {
+          tracks.push(track);
+          seen.add(track.id);
+          if (tracks.length >= maxTracks) break;
+        }
+      }
+      if (!page.has_continuation || tracks.length >= maxTracks) break;
+      page = await page.getContinuation();
+    }
+
+    if (!tracks.length) throw new CatalogError(t('catalog.noPlaylistTracks'), 'unavailable');
+    return { name, tracks, truncated: tracks.length >= maxTracks && !!page.has_continuation };
+  } catch (e) {
+    if (e instanceof CatalogError) throw e;
+    throw new CatalogError(t('catalog.loadPlaylistError'), 'network');
+  }
 }

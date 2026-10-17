@@ -10,8 +10,8 @@ export function Screen({ title, right, children, style }: {
     <SafeAreaView style={[s.root, style]} edges={['top']}>
       {title ? (
         <View style={s.header}>
-          <Text style={s.title}>{title}</Text>
-          {right}
+          <Text accessibilityRole="header" style={s.title}>{title}</Text>
+          <View style={s.right}>{right}</View>
         </View>
       ) : null}
       {children}
@@ -21,6 +21,7 @@ export function Screen({ title, right, children, style }: {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md },
-  title: { color: colors.text, fontSize: font.xxl, fontWeight: '800' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.sm },
+  title: { color: colors.text, fontSize: font.xxl, fontWeight: '800', flexShrink: 1 },
+  right: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
 });

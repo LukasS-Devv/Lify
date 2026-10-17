@@ -1,30 +1,39 @@
-import { FlatList, Text } from 'react-native';
-import { EmptyState, Screen, TrackRow } from '@/components';
-import { useHistory } from '@/features/library/useLibrary';
-import { playQueue } from '@/services/audio/controller';
-import { selectCurrentTrack, usePlayerStore } from '@/services/audio/store';
-import { colors, font, spacing } from '@/theme/tokens';
+import { useRouter } from 'expo-router';
+import { StyleSheet, View } from 'react-native';
+import { IconButton } from '@/components';
+import { Header, Home } from '@/components/spotify-clone';
+import { t, useTranslation } from '@/i18n';
+import { colors } from '@/theme/tokens';
 
-export default function Home() {
-  const { data, loading } = useHistory(30);
-  const current = usePlayerStore(selectCurrentTrack);
-  const tracks = data.map((h) => h.track);
+export default function HomeTab() {
+  useTranslation();
+  const router = useRouter();
+  const hour = new Date().getHours();
+  const greeting = t(
+    hour < 5 || hour >= 18
+      ? 'home.greeting.evening'
+      : hour < 12
+        ? 'home.greeting.morning'
+        : 'home.greeting.afternoon',
+  );
 
   return (
-    <Screen title="Lify">
-      <Text style={{ color: colors.text, fontSize: font.xl, fontWeight: '700', paddingHorizontal: spacing.md }}>
-        Tocadas recentemente
-      </Text>
-      <FlatList
-        data={tracks}
-        keyExtractor={(t, i) => `${t.id}-${i}`}
-        renderItem={({ item, index }) => (
-          <TrackRow track={item} active={item.id === current?.id} onPress={() => playQueue(tracks, index)} />
-        )}
-        ListEmptyComponent={
-          <EmptyState loading={loading} message={loading ? 'Carregando…' : 'Nada por aqui ainda. Use a aba Buscar para tocar sua primeira música.'} />
+    <View style={s.container}>
+      <Header
+        title={greeting}
+        right={
+          <IconButton
+            icon="settings-outline"
+            label={t('home.settings')}
+            onPress={() => router.push('/settings')}
+          />
         }
       />
-    </Screen>
+      <Home />
+    </View>
   );
 }
+
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.bg },
+});

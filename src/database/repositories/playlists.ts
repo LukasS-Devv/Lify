@@ -1,6 +1,7 @@
 import type { PlaylistSummary, Track } from '@/types';
 import type { Db } from '../types';
 import { rowToTrack, upsertTrack, type TrackRow } from './tracks';
+import { t } from '@/i18n';
 
 interface PlaylistRow {
   id: number;
@@ -44,7 +45,7 @@ const toSummary = (r: PlaylistRow): PlaylistSummary => ({
 
 export async function createPlaylist(db: Db, name: string, description: string | null = null): Promise<number> {
   const clean = name.trim();
-  if (!clean) throw new Error('O nome da playlist não pode ser vazio.');
+  if (!clean) throw new Error(t('db.playlistNameEmpty'));
   const now = Date.now();
   const res = await db.runAsync(
     'INSERT INTO playlists (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)',
@@ -53,9 +54,32 @@ export async function createPlaylist(db: Db, name: string, description: string |
   return res.lastInsertRowId;
 }
 
+/** Cria a playlist e grava as faixas numa única transação (tudo ou nada). */
+export async function createPlaylistWithTracks(db: Db, name: string, tracks: Track[]): Promise<number> {
+  const clean = name.trim();
+  if (!clean) throw new Error(t('db.playlistNameEmpty'));
+
+  let playlistId = 0;
+  await db.withTransactionAsync(async () => {
+    playlistId = await createPlaylist(db, clean);
+    const seen = new Set<string>();
+    let position = 0;
+    for (const track of tracks) {
+      if (seen.has(track.id)) continue;
+      seen.add(track.id);
+      await upsertTrack(db, track);
+      await db.runAsync(
+        'INSERT INTO playlist_tracks (playlist_id, track_id, position, added_at) VALUES (?, ?, ?, ?)',
+        playlistId, track.id, position++, Date.now(),
+      );
+    }
+  });
+  return playlistId;
+}
+
 export async function renamePlaylist(db: Db, id: number, name: string): Promise<void> {
   const clean = name.trim();
-  if (!clean) throw new Error('O nome da playlist não pode ser vazio.');
+  if (!clean) throw new Error(t('db.playlistNameEmpty'));
   await db.runAsync('UPDATE playlists SET name = ?, updated_at = ? WHERE id = ?', clean, Date.now(), id);
 }
 

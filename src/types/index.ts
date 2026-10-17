@@ -31,15 +31,25 @@ export interface HistoryEntry {
 }
 
 export type RepeatMode = 'off' | 'all' | 'one';
+export type StreamServerMode = 'lify' | 'custom';
+export type PlaybackMode = 'dataSaver' | 'standard';
 
 export interface AppSettings {
+  language: 'pt' | 'en';
   repeatMode: RepeatMode;
+  playbackMode: PlaybackMode;
   autoQueue: boolean; // preencher fila automaticamente com relacionadas
   historyEnabled: boolean;
+  streamServerMode: StreamServerMode;
+  customStreamServerUrl: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
+  language: 'pt',
   repeatMode: 'off',
+  playbackMode: 'standard',
   autoQueue: true,
   historyEnabled: true,
+  streamServerMode: 'lify',
+  customStreamServerUrl: '',
 };

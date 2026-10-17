@@ -1,0 +1,28 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "paths": {
+      "@assets/*": ["./assets/*"],
+      "@api": ["./api/index.ts"],
+      "@components": ["./components/index.ts"],
+      "@config": ["./config/index.ts"],
+      "@context": ["./context/index.ts"],
+      "@data": ["./data/index.ts"],
+      "@hooks": ["./hooks/index.ts"],
+      "@models": ["./models/index.ts"],
+      "@navigators": ["./navigators/index.ts"],
+      "@screens": ["./screens/index.ts"],
+      "@services": ["./services/index.ts"],
+      "@utils": ["./utils/index.ts"]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.ts",
+    "@typings/index.d.ts",
+    "@typings/global.d.ts",
+    "expo-env.d.ts"
+  ]
+}

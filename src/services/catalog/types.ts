@@ -5,7 +5,29 @@ export interface StreamInfo {
   mimeType: string | null;
   /** epoch ms em que a URL expira (se conhecido) */
   expiresAt: number | null;
-  headers?: Record<string, string>;
+}
+
+export interface CatalogArtist {
+  id: string;
+  name: string;
+  subtitle: string;
+  imageUrl: string | null;
+}
+
+export interface ArtistCollectionItem {
+  id: string;
+  title: string;
+  subtitle: string;
+  imageUrl: string | null;
+}
+
+export interface ArtistProfile extends CatalogArtist {
+  description: string;
+  tracks: Track[];
+  albums: ArtistCollectionItem[];
+  singles: ArtistCollectionItem[];
+  playlists: ArtistCollectionItem[];
+  relatedArtists: CatalogArtist[];
 }
 
 /**
@@ -14,6 +36,8 @@ export interface StreamInfo {
  */
 export interface CatalogProvider {
   search(query: string): Promise<Track[]>;
+  searchArtists(query: string): Promise<CatalogArtist[]>;
+  getArtist(id: string): Promise<ArtistProfile>;
   suggestions(query: string): Promise<string[]>;
   getStream(track: Track): Promise<StreamInfo>;
   /** Faixas relacionadas/“próximas” para preencher a fila automática. */

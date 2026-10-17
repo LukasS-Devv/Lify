@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
+import { t } from '@/i18n';
 
 /** Executa `loader` sempre que a tela ganha foco; expõe estado e reload manual. */
 export function useFocusLoad<T>(loader: () => Promise<T>, initial: T) {
@@ -15,7 +16,7 @@ export function useFocusLoad<T>(loader: () => Promise<T>, initial: T) {
       setData(await loaderRef.current());
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Falha ao carregar.');
+      setError(e instanceof Error ? e.message : t('common.error'));
     } finally {
       setLoading(false);
     }

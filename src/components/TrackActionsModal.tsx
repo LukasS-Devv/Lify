@@ -3,12 +3,18 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import type { PlaylistSummary, Track } from '@/types';
 import { favoritesRepo, getDb, playlistsRepo } from '@/database';
 import { addToQueueEnd, addToQueueNext } from '@/services/audio/controller';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { t, useTranslation } from '@/i18n';
 import { colors, font, radius, spacing } from '@/theme/tokens';
+import { Cover } from './Cover';
+import { Icon, type IconName } from './Icon';
 
-/** Menu de ações de uma faixa: favoritar, fila, adicionar a playlist. */
-export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist }: {
-  track: Track | null; onClose: () => void; onRemoveFromPlaylist?: (t: Track) => void;
+/** Menu de ações de uma faixa: curtir, fila, adicionar a playlist. */
+export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSleepTimer }: {
+  track: Track | null; onClose: () => void; onRemoveFromPlaylist?: (t: Track) => void; onSleepTimer?: () => void;
 }) {
+  useTranslation();
+  const insets = useSafeAreaInsets();
   const [fav, setFav] = useState(false);
   const [lists, setLists] = useState<PlaylistSummary[]>([]);
   const [showLists, setShowLists] = useState(false);
@@ -32,63 +38,72 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist }: {
       if (m) setMsg(m);
       else onClose();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : 'Algo deu errado.');
+      setMsg(e instanceof Error ? e.message : t('common.error'));
     }
   };
 
   return (
     <Modal transparent animationType="fade" visible onRequestClose={onClose}>
       <Pressable style={s.backdrop} onPress={onClose} />
-      <View style={s.sheet}>
-        <Text numberOfLines={1} style={s.title}>{track.title}</Text>
-        <Text numberOfLines={1} style={s.sub}>{track.artist}</Text>
+      <View style={[s.sheet, { paddingBottom: Math.max(insets.bottom, spacing.md) + spacing.md }]}>
+        <View style={s.head}>
+          <Cover uri={track.artworkUrl} size={48} />
+          <View style={{ flex: 1 }}>
+            <Text numberOfLines={1} style={s.title}>{track.title}</Text>
+            <Text numberOfLines={1} style={s.sub}>{track.artist}</Text>
+          </View>
+        </View>
         {msg ? <Text style={s.msg}>{msg}</Text> : null}
 
         {showLists ? (
           <ScrollView style={{ maxHeight: 280 }}>
-            {lists.length === 0 ? <Text style={s.sub}>Nenhuma playlist criada ainda.</Text> : null}
+            {lists.length === 0 ? <Text style={s.sub}>{t('actions.noPlaylists')}</Text> : null}
             {lists.map((p) => (
-              <Item key={p.id} label={p.name} onPress={() => run(async () => {
+              <Item key={p.id} icon="list" label={p.name} onPress={() => run(async () => {
                 const added = await playlistsRepo.addTrackToPlaylist(await getDb(), p.id, track);
-                return added ? `Adicionada a "${p.name}"` : `Já está em "${p.name}"`;
+                return added ? t('actions.addedTo', { name: p.name }) : t('actions.alreadyIn', { name: p.name });
               })} />
             ))}
           </ScrollView>
         ) : (
           <>
-            <Item label={fav ? 'Remover dos favoritos' : 'Adicionar aos favoritos'} onPress={() => run(async () => {
+            <Item icon={fav ? 'heart' : 'heart-outline'} label={fav ? t('actions.unlike') : t('actions.like')} onPress={() => run(async () => {
               const now = await favoritesRepo.toggleFavorite(await getDb(), track);
               setFav(now);
-              return now ? 'Adicionada aos favoritos' : 'Removida dos favoritos';
+              return now ? t('actions.liked') : t('actions.unliked');
             })} />
-            <Item label="Adicionar a uma playlist" onPress={() => setShowLists(true)} />
-            <Item label="Tocar a seguir" onPress={() => run(() => { addToQueueNext(track); return 'Adicionada à fila'; })} />
-            <Item label="Adicionar ao fim da fila" onPress={() => run(() => { addToQueueEnd([track]); return 'Adicionada à fila'; })} />
+            <Item icon="add-circle-outline" label={t('actions.addToPlaylist')} onPress={() => setShowLists(true)} />
+            <Item icon="play-forward-outline" label={t('actions.playNext')} onPress={() => run(() => { addToQueueNext(track); return t('actions.queued'); })} />
+            <Item icon="list-outline" label={t('actions.addToQueue')} onPress={() => run(() => { addToQueueEnd([track]); return t('actions.queued'); })} />
+            {onSleepTimer ? <Item icon="timer-outline" label={t('player.sleepTimer.open')} onPress={onSleepTimer} /> : null}
             {onRemoveFromPlaylist ? (
-              <Item label="Remover desta playlist" danger onPress={() => { onRemoveFromPlaylist(track); onClose(); }} />
+              <Item icon="trash-outline" label={t('actions.removeFromPlaylist')} danger onPress={() => { onRemoveFromPlaylist(track); onClose(); }} />
             ) : null}
           </>
         )}
-        <Item label="Fechar" onPress={onClose} />
+        <Item icon="close" label={t('common.close')} muted onPress={onClose} />
       </View>
     </Modal>
   );
 }
 
-function Item({ label, onPress, danger }: { label: string; onPress: () => void; danger?: boolean }) {
+function Item({ icon, label, onPress, danger, muted }: { icon: IconName; label: string; onPress: () => void; danger?: boolean; muted?: boolean }) {
+  const color = danger ? colors.danger : muted ? colors.textMuted : colors.text;
   return (
     <Pressable onPress={onPress} style={s.item}>
-      <Text style={[s.itemText, danger && { color: colors.danger }]}>{label}</Text>
+      <Icon name={icon} size={22} color={color} />
+      <Text style={[s.itemText, { color }]}>{label}</Text>
     </Pressable>
   );
 }
 
 const s = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' },
-  sheet: { backgroundColor: colors.surfaceAlt, padding: spacing.md, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg },
+  backdrop: { flex: 1, backgroundColor: colors.overlay },
+  sheet: { backgroundColor: colors.surfaceAlt, padding: spacing.md, paddingBottom: spacing.lg, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl },
+  head: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingBottom: spacing.sm },
   title: { color: colors.text, fontSize: font.lg, fontWeight: '700' },
-  sub: { color: colors.textMuted, fontSize: font.md, marginBottom: spacing.sm },
-  msg: { color: colors.accent, marginBottom: spacing.sm },
-  item: { paddingVertical: 14 },
-  itemText: { color: colors.text, fontSize: font.lg },
+  sub: { color: colors.textMuted, fontSize: font.md },
+  msg: { color: colors.accent, marginBottom: spacing.sm, fontSize: font.md },
+  item: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 14 },
+  itemText: { fontSize: font.lg },
 });

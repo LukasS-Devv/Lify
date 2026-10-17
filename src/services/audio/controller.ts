@@ -12,23 +12,71 @@ import {
   removeAt, setQueue, shuffleRest, emptyQueue,
 } from './queue';
 import { usePlayerStore } from './store';
+import { t as tr } from '@/i18n';
 
 const store = () => usePlayerStore.getState();
 let setupDone: Promise<void> | null = null;
 let retriedFor: string | null = null; // faixa que já teve 1 retry automático
+let lastNativeError = '';
 let loadToken = 0; // invalida carregamentos antigos quando o usuário pula rápido
+let sleepTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleSleepTimer(endAt: number): void {
+  const remaining = endAt - Date.now();
+  if (remaining > 0) {
+    sleepTimer = setTimeout(() => scheduleSleepTimer(endAt), Math.min(remaining, 2_147_000_000));
+    return;
+  }
+
+  sleepTimer = null;
+  if (store().sleepTimerEndsAt !== endAt) return;
+  store().set({ sleepTimerEndsAt: null });
+  loadToken++;
+  void TrackPlayer.pause().then(
+    () => store().set({ status: 'paused', error: null }),
+    (error: unknown) => store().set({
+      status: 'error',
+      error: error instanceof Error ? error.message : tr('player.sleepTimer.pauseFailed'),
+    }),
+  );
+}
+
+export function setSleepTimer(minutes: number): void {
+  if (!Number.isSafeInteger(minutes) || minutes <= 0 || !Number.isSafeInteger(Date.now() + minutes * 60_000)) {
+    throw new RangeError('Sleep timer duration must be a positive, safe integer number of minutes.');
+  }
+  if (sleepTimer) clearTimeout(sleepTimer);
+  const endAt = Date.now() + minutes * 60_000;
+  store().set({ sleepTimerEndsAt: endAt });
+  scheduleSleepTimer(endAt);
+}
+
+export function cancelSleepTimer(): void {
+  if (sleepTimer) clearTimeout(sleepTimer);
+  sleepTimer = null;
+  store().set({ sleepTimerEndsAt: null });
+}
 
 /* ------------------------------ setup ------------------------------ */
 
 export function setupAudio(): Promise<void> {
   if (!setupDone) {
     setupDone = (async () => {
+      const settings = await settingsRepo.loadSettings(await getDb());
+      const dataSaver = settings.playbackMode === 'dataSaver';
       try {
-        await TrackPlayer.setupPlayer({ autoHandleInterruptions: true });
+        await TrackPlayer.setupPlayer({
+          autoHandleInterruptions: true,
+          minBuffer: dataSaver ? 5 : 30,
+          maxBuffer: dataSaver ? 15 : 30,
+          playBuffer: 3,
+          backBuffer: 0,
+        });
       } catch (e) {
         // "already initialized" ao recarregar em dev
         if (!(e instanceof Error) || !/already been initialized/i.test(e.message)) throw e;
       }
+      store().set({ repeat: settings.repeatMode, autoQueue: settings.autoQueue });
       await TrackPlayer.updateOptions({
         android: { appKilledPlaybackBehavior: AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification },
         capabilities: [
@@ -38,10 +86,6 @@ export function setupAudio(): Promise<void> {
         compactCapabilities: [Capability.Play, Capability.Pause, Capability.SkipToNext],
         progressUpdateEventInterval: 1,
       });
-      try {
-        const s = await settingsRepo.loadSettings(await getDb());
-        store().set({ repeat: s.repeatMode, autoQueue: s.autoQueue });
-      } catch { /* defaults */ }
     })().catch((e) => {
       setupDone = null;
       throw e;
@@ -62,16 +106,20 @@ async function loadAndPlay(track: Track, startAt = 0, isRetry = false): Promise<
     if (token !== loadToken) return; // usuário já escolheu outra faixa
 
     await TrackPlayer.reset();
+    if (token !== loadToken) return;
     await TrackPlayer.add({
       id: track.id,
       url: stream.url,
+      contentType: stream.mimeType?.split(';')[0],
       title: track.title,
       artist: track.artist,
       album: track.album ?? undefined,
       artwork: track.artworkUrl,
       duration: track.durationSec ?? undefined,
     });
+    if (token !== loadToken) return;
     if (startAt > 0) await TrackPlayer.seekTo(startAt);
+    if (token !== loadToken) return;
     await TrackPlayer.play();
 
     if (!isRetry) {
@@ -80,7 +128,7 @@ async function loadAndPlay(track: Track, startAt = 0, isRetry = false): Promise<
     }
   } catch (e) {
     if (token !== loadToken) return;
-    store().set({ status: 'error', error: e instanceof Error ? e.message : 'Erro ao reproduzir.' });
+    store().set({ status: 'error', error: e instanceof Error ? e.message : tr('player.error') });
   }
 }
 
@@ -164,6 +212,7 @@ export const seekTo = (sec: number) => TrackPlayer.seekTo(sec);
 
 export async function stop(): Promise<void> {
   loadToken++;
+  cancelSleepTimer();
   await TrackPlayer.reset().catch(() => {});
   store().set({ queue: emptyQueue, status: 'idle', error: null });
 }
@@ -227,7 +276,9 @@ export function attachPlayerEvents() {
   });
 
   // URL expirada / falha de rede: tenta uma vez re-resolver o stream na mesma posição.
-  TrackPlayer.addEventListener(Event.PlaybackError, async () => {
+  TrackPlayer.addEventListener(Event.PlaybackError, async (e) => {
+    console.warn('[player] PlaybackError', e.code, e.message);
+    lastNativeError = `${e.message ?? ''} (${e.code ?? '?'})`;
     const t = currentOf(store().queue);
     if (!t) return;
     if (retriedFor !== t.id) {
@@ -235,7 +286,7 @@ export function attachPlayerEvents() {
       const { position } = await TrackPlayer.getProgress().catch(() => ({ position: 0 }));
       await loadAndPlay(t, position, true);
     } else {
-      store().set({ status: 'error', error: 'Erro ao reproduzir esta faixa.' });
+      store().set({ status: 'error', error: tr('player.errorTrack', { detail: lastNativeError }) });
     }
   });
 

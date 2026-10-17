@@ -1,0 +1,1 @@
+export { parseToBrowseCategories } from './parseToBrowseCategories';

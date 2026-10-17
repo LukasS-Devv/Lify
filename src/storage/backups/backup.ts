@@ -5,6 +5,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { getDb, runMigrations } from '@/database/client';
 import { LATEST_VERSION } from '@/database/migrations';
 import { copyAllData } from './copyData';
+import { t } from '@/i18n';
 
 const BACKUP_DIR = 'backups';
 
@@ -38,12 +39,15 @@ export async function exportBackup(): Promise<{ uri: string; shared: boolean }> 
   if (canShare) {
     await Sharing.shareAsync(file.uri, {
       mimeType: 'application/vnd.sqlite3',
-      dialogTitle: 'Salvar backup do Lify',
+      dialogTitle: t('backup.dialogTitle'),
       UTI: 'public.database',
     });
   }
   return { uri: file.uri, shared: canShare };
 }
+
+/** Erro de validação mostrado ao usuário (distinto de falhas internas). */
+export class BackupError extends Error {}
 
 export type ImportResult =
   | { status: 'cancelled' }
@@ -74,16 +78,16 @@ export async function importFromBytes(bytes: Uint8Array): Promise<ImportResult> 
     const v = await incoming.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
     if ((v?.user_version ?? 0) > LATEST_VERSION) {
       await incoming.closeAsync();
-      throw new Error('Este backup foi criado por uma versão mais nova do Lify. Atualize o app.');
+      throw new BackupError(t('backup.tooNew'));
     }
     if ((v?.user_version ?? 0) === 0) {
       await incoming.closeAsync();
-      throw new Error('Arquivo inválido: não parece um backup do Lify.');
+      throw new BackupError(t('backup.notLify'));
     }
     await runMigrations(incoming);
   } catch (e) {
-    if (e instanceof Error && /Lify|Atualize/.test(e.message)) throw e;
-    throw new Error('Arquivo inválido: não é um banco SQLite legível.');
+    if (e instanceof BackupError) throw e;
+    throw new BackupError(t('backup.unreadable'));
   }
 
   try {

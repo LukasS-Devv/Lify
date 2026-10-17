@@ -1,35 +1,28 @@
-import { forwardRef } from 'react';
-import { Pressable, Text, View, StyleSheet } from 'react-native';
-import type { TabTriggerSlotProps } from 'expo-router/ui';
+import { StyleSheet } from 'react-native';
 import { TabList, TabSlot, TabTrigger, Tabs } from 'expo-router/ui';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MiniPlayer } from '@/components';
-import { colors, font, spacing } from '@/theme/tokens';
+import { BottomTabButton, type TabIconName } from '@/components/spotify-clone';
+import { t, useTranslation } from '@/i18n';
+import { colors, spacing } from '@/theme/tokens';
 
-const TABS = [
-  { name: 'index', href: '/', label: 'Início' },
-  { name: 'search', href: '/search', label: 'Buscar' },
-  { name: 'library', href: '/library', label: 'Biblioteca' },
-  { name: 'playlists', href: '/playlists', label: 'Playlists' },
-  { name: 'settings', href: '/settings', label: 'Ajustes' },
-] as const;
+const TABS: { name: string; href: '/' | '/search' | '/library'; label: () => string; icon: TabIconName }[] = [
+  { name: 'index', href: '/', label: () => t('tabs.home'), icon: 'home' },
+  { name: 'search', href: '/search', label: () => t('tabs.search'), icon: 'search' },
+  { name: 'library', href: '/library', label: () => t('tabs.library'), icon: 'library' },
+];
 
-/**
- * Tabs "headless": estrutura e navegação prontas, sem estilo nativo.
- * Na fase visual basta trocar a aparência de <TabTrigger> (ícones, animações).
- */
 export default function TabsLayout() {
+  useTranslation();
   const insets = useSafeAreaInsets();
-  // IMPORTANTE: o expo-router só descobre as rotas se <TabList> for filho DIRETO de <Tabs>
-  // (não pode estar dentro de View/SafeAreaView), por isso o layout é feito via estilos.
   return (
     <Tabs style={{ flex: 1, backgroundColor: colors.bg }}>
       <TabSlot style={{ flex: 1 }} />
       <MiniPlayer />
-      <TabList style={[s.bar, { paddingBottom: insets.bottom }]}>
-        {TABS.map((t) => (
-          <TabTrigger key={t.name} name={t.name} href={t.href} asChild>
-            <TabButton label={t.label} />
+      <TabList style={[s.bar, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
+        {TABS.map((tab) => (
+          <TabTrigger key={tab.name} name={tab.name} href={tab.href} asChild>
+            <BottomTabButton label={tab.label()} icon={tab.icon} />
           </TabTrigger>
         ))}
       </TabList>
@@ -37,18 +30,6 @@ export default function TabsLayout() {
   );
 }
 
-// Com `asChild`, o TabTrigger injeta onPress/isFocused neste componente.
-const TabButton = forwardRef<View, TabTriggerSlotProps & { label: string }>(
-  ({ label, isFocused, children: _c, ...props }, ref) => (
-    <Pressable ref={ref} {...props} style={s.trigger}>
-      <Text style={[s.label, isFocused && { color: colors.accent }]}>{label}</Text>
-    </Pressable>
-  ),
-);
-TabButton.displayName = 'TabButton';
-
 const s = StyleSheet.create({
-  bar: { flexDirection: 'row', backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
-  trigger: { flex: 1, alignItems: 'center', paddingVertical: spacing.md },
-  label: { color: colors.textMuted, fontSize: font.sm, fontWeight: '600' },
+  bar: { flexDirection: 'row', backgroundColor: colors.bg, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: spacing.sm },
 });

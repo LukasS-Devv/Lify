@@ -37,6 +37,20 @@ test('playlist: criar, adicionar sem duplicar, ordenar, remover', async () => {
   assert.equal((await playlists.getPlaylistTracks(db, id)).length, 0);
 });
 
+test('playlist import: creates playlist with unique tracks in original order', async () => {
+  const db = memoryDb();
+  const id = await playlists.createPlaylistWithTracks(db, 'Imported mix', [
+    T('first'),
+    T('second'),
+    T('first'),
+  ]);
+  assert.deepEqual(
+    (await playlists.getPlaylistTracks(db, id)).map((track) => track.sourceId),
+    ['first', 'second'],
+  );
+  assert.equal((await playlists.getPlaylist(db, id))?.name, 'Imported mix');
+});
+
 test('favoritos: toggle', async () => {
   const db = memoryDb();
   assert.equal(await favorites.toggleFavorite(db, T('x')), true);
@@ -62,11 +76,15 @@ test('settings: defaults, persistência e valor corrompido', async () => {
   const db = memoryDb();
   assert.deepEqual(await settings.loadSettings(db), DEFAULT_SETTINGS);
   await settings.saveSetting(db, 'repeatMode', 'all');
+  await settings.saveSetting(db, 'playbackMode', 'dataSaver');
   await settings.saveSetting(db, 'autoQueue', false);
+  await settings.saveSetting(db, 'language', 'en');
   await db.runAsync("INSERT INTO settings (key, value) VALUES ('historyEnabled', '{oops')");
   const s = await settings.loadSettings(db);
   assert.equal(s.repeatMode, 'all');
+  assert.equal(s.playbackMode, 'dataSaver');
   assert.equal(s.autoQueue, false);
+  assert.equal(s.language, 'en');
   assert.equal(s.historyEnabled, true);
 });
 

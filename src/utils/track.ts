@@ -1,4 +1,5 @@
 import type { Track } from '@/types';
+import { t } from '@/i18n';
 
 export const makeTrackId = (sourceId: string) => `youtube:${sourceId}`;
 
@@ -26,10 +27,20 @@ export function makeTrack(input: {
     id: makeTrackId(input.sourceId),
     source: 'youtube',
     sourceId: input.sourceId,
-    title: input.title || 'Sem título',
-    artist: input.artist || 'Artista desconhecido',
+    title: input.title || t('track.untitled'),
+    artist: input.artist || t('track.unknownArtist'),
     album: input.album ?? null,
     durationSec: input.durationSec ?? null,
     artworkUrl: thumbnailFor(input.sourceId),
   };
+}
+
+/** Duração total legível (ex.: "1 h 12 min"). Ignora faixas sem duração. */
+export function formatTotalDuration(tracks: readonly Track[]): string {
+  const total = tracks.reduce((acc, tr) => acc + (tr.durationSec ?? 0), 0);
+  const min = Math.round(total / 60);
+  if (min <= 0) return '';
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return h > 0 ? `${h} h ${m} min` : `${m} min`;
 }
