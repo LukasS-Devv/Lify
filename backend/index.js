@@ -313,39 +313,65 @@ function createApp({
       if (typeof req.headers['if-range'] === 'string') upstreamHeaders['If-Range'] = req.headers['if-range'];
 
       try {
-        upstreamTimer = setTimeout(() => {
-          upstreamRequest?.destroy(new StreamError('Upstream response timed out', 504));
-        }, options.upstreamTimeoutMs);
-        upstreamRequest = requestUpstream(new URL(stream.url), { headers: upstreamHeaders }, (response) => {
+        const startUpstreamTimer = () => {
           clearTimeout(upstreamTimer);
-          upstreamResponse = response;
-          upstreamMs = Date.now() - resolutionCompletedAt;
-          if (cancelled || res.destroyed) {
-            response.destroy();
-            return;
-          }
-          for (const name of FORWARDED_RESPONSE_HEADERS) {
-            const value = response.headers[name];
-            if (value !== undefined) res.setHeader(name, value);
-          }
-          res.setHeader('Cache-Control', 'no-store, no-transform');
-          res.setHeader('X-Content-Type-Options', 'nosniff');
-          responseStatus = response.statusCode || 502;
-          res.status(responseStatus);
-          response.once('data', () => {
-            if (firstByteMs === null) firstByteMs = Date.now() - requestStartedAt;
+          upstreamTimer = setTimeout(() => {
+            upstreamRequest?.destroy(new StreamError('Upstream response timed out', 504));
+          }, options.upstreamTimeoutMs);
+        };
+        const openUpstream = (targetUrl, redirectsLeft) => {
+          startUpstreamTimer();
+          upstreamRequest = requestUpstream(targetUrl, { headers: upstreamHeaders }, (response) => {
+            const status = response.statusCode || 502;
+            const location = response.headers.location;
+            if ([301, 302, 303, 307, 308].includes(status) && location && !cancelled && !res.destroyed) {
+              response.resume();
+              let next;
+              try {
+                next = new URL(location, targetUrl);
+              } catch {
+                fail(new Error('Invalid upstream redirect'), 'upstream');
+                return;
+              }
+              if (redirectsLeft <= 0 || next.protocol !== 'https:' || !next.hostname.endsWith('.googlevideo.com')) {
+                fail(new Error('Unsupported upstream redirect'), 'upstream');
+                return;
+              }
+              openUpstream(next, redirectsLeft - 1);
+              return;
+            }
+            clearTimeout(upstreamTimer);
+            upstreamResponse = response;
+            upstreamMs = Date.now() - resolutionCompletedAt;
+            if (cancelled || res.destroyed) {
+              response.destroy();
+              return;
+            }
+            for (const name of FORWARDED_RESPONSE_HEADERS) {
+              const value = response.headers[name];
+              if (value !== undefined) res.setHeader(name, value);
+            }
+            res.setHeader('Cache-Control', 'no-store, no-transform');
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            responseStatus = status;
+            res.status(responseStatus);
+            response.once('data', () => {
+              if (firstByteMs === null) firstByteMs = Date.now() - requestStartedAt;
+            });
+            response.setTimeout?.(options.upstreamInactivityTimeoutMs, () => {
+              response.destroy(new StreamError('Upstream audio stalled', 504));
+            });
+            response.once('error', (error) => fail(error, 'upstream'));
+            response.pipe(res);
           });
-          response.setTimeout?.(options.upstreamInactivityTimeoutMs, () => {
-            response.destroy(new StreamError('Upstream audio stalled', 504));
+          const current = upstreamRequest;
+          current.once('error', (error) => fail(error, 'upstream'));
+          current.setTimeout?.(options.upstreamTimeoutMs, () => {
+            current.destroy(new StreamError('Upstream connection timed out', 504));
           });
-          response.once('error', (error) => fail(error, 'upstream'));
-          response.pipe(res);
-        });
-        upstreamRequest.once('error', (error) => fail(error, 'upstream'));
-        upstreamRequest.setTimeout?.(options.upstreamTimeoutMs, () => {
-          upstreamRequest.destroy(new StreamError('Upstream connection timed out', 504));
-        });
-        upstreamRequest.end();
+          current.end();
+        };
+        openUpstream(new URL(stream.url), 3);
       } catch (error) {
         fail(error, 'upstream');
       }

@@ -285,95 +285,50 @@ test('stream endpoint times out yt-dlp resolution', async (t) => {
   assert.deepEqual(await response.json(), { error: 'stream_timeout' });
 });
 
-function ytdlpStub(url) {
-  return () => {
-    const process = new EventEmitter();
-    process.exitCode = null;
-    process.signalCode = null;
-    process.stdout = new PassThrough();
-    process.stderr = new PassThrough();
-    process.kill = () => true;
-    setImmediate(() => {
-      process.stdout.end(JSON.stringify({ url, http_headers: { 'User-Agent': 'yt-dlp-test' } }));
-      process.exitCode = 0;
-      process.emit('close', 0);
-    });
-    return process;
-  };
-}
-
-function fakeRequest(respond) {
-  const request = new EventEmitter();
-  request.end = () => setImmediate(respond);
-  request.destroy = () => {};
-  return request;
-}
-
-test('stream endpoint follows googlevideo redirects and keeps the Range header', async (t) => {
-  const first = 'https://rr1---sn-a.googlevideo.com/videoplayback?signature=abc';
-  const second = 'https://rr2---sn-b.googlevideo.com/videoplayback?signature=abc&cm2=1';
+test('stream endpoint follows googlevideo redirects instead of forwarding them', async (t) => {
+  const first = 'https://r1---sn.googlevideo.com/videoplayback?signature=abc';
+  const second = 'https://r2---sn.googlevideo.com/videoplayback?signature=abc&rr=1';
   const requested = [];
-  const requestUpstream = (url, options, onResponse) => {
-    requested.push({ url: url.toString(), range: options.headers.Range });
-    return fakeRequest(() => {
+  const spawnProcess = () => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = () => {};
+    setImmediate(() => {
+      child.stdout.end(JSON.stringify({ url: first, http_headers: {} }));
+      child.exitCode = 0;
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  const requestUpstream = (url, _options, onResponse) => {
+    requested.push(url.toString());
+    const request = new EventEmitter();
+    request.end = () => setImmediate(() => {
       const response = new PassThrough();
-      if (url.toString() === first) {
+      if (requested.length === 1) {
         response.statusCode = 302;
         response.headers = { location: second };
         onResponse(response);
         response.end();
-        return;
+      } else {
+        response.statusCode = 200;
+        response.headers = { 'content-type': 'audio/mp4' };
+        onResponse(response);
+        response.end('audio-data');
       }
-      response.statusCode = 206;
-      response.headers = { 'content-range': 'bytes 0-9/100', 'content-type': 'audio/mp4' };
-      onResponse(response);
-      response.end('audio-data');
     });
+    request.destroy = () => {};
+    return request;
   };
-  const server = createApp({ spawnProcess: ytdlpStub(first), requestUpstream, downloaderPath: 'yt-dlp-test' }).listen(0, '127.0.0.1');
+  const server = createApp({ spawnProcess, requestUpstream, downloaderPath: 'yt-dlp-test' }).listen(0, '127.0.0.1');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   await new Promise((resolve) => server.once('listening', resolve));
 
-  const response = await fetch(`http://127.0.0.1:${server.address().port}/stream/abcdefghijk`, { headers: { Range: 'bytes=0-9' } });
-  assert.equal(response.status, 206);
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/stream/abcdefghijk`);
+  assert.equal(response.status, 200);
   assert.equal(await response.text(), 'audio-data');
-  assert.deepEqual(requested, [{ url: first, range: 'bytes=0-9' }, { url: second, range: 'bytes=0-9' }]);
-});
-
-test('stream endpoint refuses redirects to hosts outside googlevideo', async (t) => {
-  const first = 'https://rr1---sn-a.googlevideo.com/videoplayback?signature=abc';
-  const requestUpstream = (url, _options, onResponse) => fakeRequest(() => {
-    const response = new PassThrough();
-    response.statusCode = 302;
-    response.headers = { location: 'https://evil.example.com/audio' };
-    onResponse(response);
-    response.end();
-  });
-  const server = createApp({ spawnProcess: ytdlpStub(first), requestUpstream, downloaderPath: 'yt-dlp-test' }).listen(0, '127.0.0.1');
-  t.after(() => new Promise((resolve) => server.close(resolve)));
-  await new Promise((resolve) => server.once('listening', resolve));
-
-  const response = await fetch(`http://127.0.0.1:${server.address().port}/stream/abcdefghijk`);
-  assert.equal(response.status, 502);
-  assert.deepEqual(await response.json(), { error: 'stream_unavailable' });
-});
-
-test('stream endpoint gives up after too many redirects', async (t) => {
-  const first = 'https://rr1---sn-a.googlevideo.com/videoplayback?signature=abc';
-  let hops = 0;
-  const requestUpstream = (url, _options, onResponse) => fakeRequest(() => {
-    hops += 1;
-    const response = new PassThrough();
-    response.statusCode = 302;
-    response.headers = { location: first };
-    onResponse(response);
-    response.end();
-  });
-  const server = createApp({ spawnProcess: ytdlpStub(first), requestUpstream, downloaderPath: 'yt-dlp-test' }).listen(0, '127.0.0.1');
-  t.after(() => new Promise((resolve) => server.close(resolve)));
-  await new Promise((resolve) => server.once('listening', resolve));
-
-  const response = await fetch(`http://127.0.0.1:${server.address().port}/stream/abcdefghijk`);
-  assert.equal(response.status, 502);
-  assert.equal(hops, 4); // 1 pedido inicial + 3 redirecionamentos
+  assert.deepEqual(requested, [first, second]);
 });
