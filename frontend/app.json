@@ -7,6 +7,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
+    "icon": "./assets/images/LifyIcon2.png", 
     "ios": {
       "bundleIdentifier": "com.lify.app",
       "infoPlist": {

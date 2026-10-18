@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "899c75df-db72-4e82-aab8-37cc18ad2d84"
+      }
+    },
+    "android": {
+      "package": "com.appbuilderrrr.lifyworkspace"
+    }
+  }
+}
