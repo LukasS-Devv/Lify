@@ -41,8 +41,13 @@ function prepareCookiesFile(env = process.env, logger = console) {
   try {
     const cookiesPath = path.join(os.tmpdir(), 'yt-cookies.txt');
     // Aceita quebras de linha reais ou escapadas (\n) caso o painel as escape.
-    const content = raw.includes('\n') ? raw : raw.replace(/\\n/g, '\n');
-    fs.writeFileSync(cookiesPath, content.endsWith('\n') ? content : `${content}\n`, { mode: 0o600 });
+    let content = raw.includes('\n') ? raw : raw.replace(/\\n/g, '\n');
+    content = content.replace(/\r\n?/g, '\n').trim();
+    if (!/^# (Netscape )?HTTP Cookie File/.test(content)) {
+      content = `# Netscape HTTP Cookie File\n${content}`;
+    }
+    fs.writeFileSync(cookiesPath, `${content}\n`, { mode: 0o600 });
+    logger.log?.(`[stream] YT_COOKIES loaded (${content.split('\n').length} lines)`);
     return cookiesPath;
   } catch (error) {
     logger.error?.('[stream] Failed to write YT_COOKIES file', error.message);
@@ -134,6 +139,9 @@ function createApp({
           '--no-warnings',
           '--no-progress',
           '--extractor-args', `youtube:player_client=${playerClients}`,
+          // O YouTube exige um runtime JS (EJS); só o deno vem ativado por defeito.
+          '--js-runtimes', `node:${process.execPath}`,
+          '--remote-components', 'ejs:github',
           ...(cookiesPath ? ['--cookies', cookiesPath] : []),
           '--',
           sourceUrl,
