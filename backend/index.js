@@ -1,7 +1,10 @@
 'use strict';
 
 const { spawn } = require('node:child_process');
+const fs = require('node:fs');
 const https = require('node:https');
+const os = require('node:os');
+const path = require('node:path');
 const express = require('express');
 const ytdlp = require('youtube-dl-exec');
 
@@ -12,8 +15,6 @@ const AUDIO_FORMATS = {
   dataSaver: 'bestaudio[abr<=64]/bestaudio[abr<=96]/worstaudio',
   standard: 'bestaudio[abr<=128]/bestaudio[abr<=160]/bestaudio',
 };
-const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-const MAX_UPSTREAM_REDIRECTS = 3;
 const FORWARDED_RESPONSE_HEADERS = [
   'accept-ranges',
   'content-length',
@@ -32,6 +33,23 @@ const DEFAULT_OPTIONS = {
   cacheExpirySafetyMs: 30_000,
 };
 
+// Cookies do YouTube (formato Netscape) fornecidos via variável de ambiente.
+// O yt-dlp pode reescrever o ficheiro, por isso é gravado numa cópia temporária.
+function prepareCookiesFile(env = process.env, logger = console) {
+  const raw = env.YT_COOKIES;
+  if (!raw || !raw.trim()) return null;
+  try {
+    const cookiesPath = path.join(os.tmpdir(), 'yt-cookies.txt');
+    // Aceita quebras de linha reais ou escapadas (\n) caso o painel as escape.
+    const content = raw.includes('\n') ? raw : raw.replace(/\\n/g, '\n');
+    fs.writeFileSync(cookiesPath, content.endsWith('\n') ? content : `${content}\n`, { mode: 0o600 });
+    return cookiesPath;
+  } catch (error) {
+    logger.error?.('[stream] Failed to write YT_COOKIES file', error.message);
+    return null;
+  }
+}
+
 class StreamError extends Error {
   constructor(message, statusCode = 502) {
     super(message);
@@ -46,27 +64,12 @@ function getUrlExpiry(streamUrl) {
   return value > 1_000_000_000_000 ? value : value * 1000;
 }
 
-/**
- * O googlevideo às vezes responde 302 apontando para outro servidor de mídia. Seguimos o
- * redirecionamento aqui, mas só para https://*.googlevideo.com (evita virar proxy aberto).
- */
-function resolveRedirect(from, location) {
-  if (typeof location !== 'string' || !location) return null;
-  let target;
-  try {
-    target = new URL(location, from);
-  } catch {
-    return null;
-  }
-  if (target.protocol !== 'https:' || !target.hostname.endsWith('.googlevideo.com')) return null;
-  return target;
-}
-
 function createApp({
   spawnProcess = spawn,
   requestUpstream = https.request,
   downloaderPath = ytdlp.constants.YOUTUBE_DL_PATH,
   logger = console,
+  cookiesPath = prepareCookiesFile(process.env, logger),
   ...providedOptions
 } = {}) {
   const options = { ...DEFAULT_OPTIONS, ...providedOptions };
@@ -128,6 +131,7 @@ function createApp({
           '--quiet',
           '--no-warnings',
           '--no-progress',
+          ...(cookiesPath ? ['--cookies', cookiesPath] : []),
           '--',
           sourceUrl,
         ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -297,28 +301,18 @@ function createApp({
       if (typeof req.headers.range === 'string') upstreamHeaders.Range = req.headers.range;
       if (typeof req.headers['if-range'] === 'string') upstreamHeaders['If-Range'] = req.headers['if-range'];
 
-      const openUpstream = (url, redirectsLeft) => {
+      try {
         upstreamTimer = setTimeout(() => {
           upstreamRequest?.destroy(new StreamError('Upstream response timed out', 504));
         }, options.upstreamTimeoutMs);
-        upstreamRequest = requestUpstream(url, { headers: upstreamHeaders }, (response) => {
+        upstreamRequest = requestUpstream(new URL(stream.url), { headers: upstreamHeaders }, (response) => {
           clearTimeout(upstreamTimer);
+          upstreamResponse = response;
+          upstreamMs = Date.now() - resolutionCompletedAt;
           if (cancelled || res.destroyed) {
             response.destroy();
             return;
           }
-          if (REDIRECT_STATUSES.has(response.statusCode)) {
-            response.resume?.();
-            const target = redirectsLeft > 0 ? resolveRedirect(url, response.headers.location) : null;
-            if (!target) {
-              fail(new StreamError('Upstream redirect was rejected'), 'upstream');
-              return;
-            }
-            openUpstream(target, redirectsLeft - 1);
-            return;
-          }
-          upstreamResponse = response;
-          upstreamMs = Date.now() - resolutionCompletedAt;
           for (const name of FORWARDED_RESPONSE_HEADERS) {
             const value = response.headers[name];
             if (value !== undefined) res.setHeader(name, value);
@@ -341,10 +335,6 @@ function createApp({
           upstreamRequest.destroy(new StreamError('Upstream connection timed out', 504));
         });
         upstreamRequest.end();
-      };
-
-      try {
-        openUpstream(new URL(stream.url), MAX_UPSTREAM_REDIRECTS);
       } catch (error) {
         fail(error, 'upstream');
       }
