@@ -24,10 +24,11 @@
         "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "WAKE_LOCK"
       ]
-    },
+    },  
     "plugins": [
       "expo-router",
       "expo-sqlite",
+      ["expo-build-properties", { "android": { "usesCleartextTraffic": true } }],
       [
         "expo-splash-screen",
         {

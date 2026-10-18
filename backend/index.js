@@ -24,8 +24,8 @@ const FORWARDED_RESPONSE_HEADERS = [
   'last-modified',
 ];
 const DEFAULT_OPTIONS = {
-  extractorTimeoutMs: 15_000,
-  upstreamTimeoutMs: 15_000,
+  extractorTimeoutMs: 45_000,
+  upstreamTimeoutMs: 30_000,
   upstreamInactivityTimeoutMs: 30_000,
   maxConcurrentResolvers: 4,
   maxCacheEntries: 200,
@@ -72,11 +72,13 @@ function getUrlExpiry(streamUrl) {
 function createApp({
   spawnProcess = spawn,
   requestUpstream = https.request,
-  downloaderPath = ytdlp.constants.YOUTUBE_DL_PATH,
+  downloaderPath = process.env.YT_DLP_PATH || ytdlp.constants.YOUTUBE_DL_PATH,
   logger = console,
   cookiesPath = prepareCookiesFile(process.env, logger),
-  // Clientes do YouTube usados pelo yt-dlp (ajustável sem alterar o código).
-  playerClients = process.env.YT_PLAYER_CLIENTS || 'tv,mweb',
+  // Opcionais (desligados por defeito, mantêm o comportamento original):
+  // YT_PLAYER_CLIENTS=tv,mweb  e  YT_JS_RUNTIME=node
+  playerClients = process.env.YT_PLAYER_CLIENTS || '',
+  jsRuntime = process.env.YT_JS_RUNTIME === 'node' ? `node:${process.execPath}` : '',
   ...providedOptions
 } = {}) {
   const options = { ...DEFAULT_OPTIONS, ...providedOptions };
@@ -138,10 +140,8 @@ function createApp({
           '--quiet',
           '--no-warnings',
           '--no-progress',
-          '--extractor-args', `youtube:player_client=${playerClients}`,
-          // O YouTube exige um runtime JS (EJS); só o deno vem ativado por defeito.
-          '--js-runtimes', `node:${process.execPath}`,
-          '--remote-components', 'ejs:github',
+          ...(playerClients ? ['--extractor-args', `youtube:player_client=${playerClients}`] : []),
+          ...(jsRuntime ? ['--js-runtimes', jsRuntime, '--remote-components', 'ejs:github'] : []),
           ...(cookiesPath ? ['--cookies', cookiesPath] : []),
           '--',
           sourceUrl,
@@ -375,7 +375,7 @@ const app = createApp();
 module.exports = { app, createApp };
 
 if (require.main === module) {
-  const port = 4000;
+  const port = Number(process.env.PORT) || 4000;
   app.listen(port, '0.0.0.0', () => {
     console.log(`[stream] The server is online on port ${port}`);
   });

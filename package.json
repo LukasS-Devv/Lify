@@ -11,5 +11,8 @@
     "test": "cd frontend && npm test",
     "backend:start": "cd Backend && npm start",
     "backend:test": "cd Backend && npm test"
+  },
+  "dependencies": {
+    "expo-build-properties": "~57.0.22"
   }
 }
