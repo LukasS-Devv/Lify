@@ -70,6 +70,8 @@ function createApp({
   downloaderPath = ytdlp.constants.YOUTUBE_DL_PATH,
   logger = console,
   cookiesPath = prepareCookiesFile(process.env, logger),
+  // Clientes do YouTube usados pelo yt-dlp (ajustável sem alterar o código).
+  playerClients = process.env.YT_PLAYER_CLIENTS || 'tv,mweb',
   ...providedOptions
 } = {}) {
   const options = { ...DEFAULT_OPTIONS, ...providedOptions };
@@ -131,6 +133,7 @@ function createApp({
           '--quiet',
           '--no-warnings',
           '--no-progress',
+          '--extractor-args', `youtube:player_client=${playerClients}`,
           ...(cookiesPath ? ['--cookies', cookiesPath] : []),
           '--',
           sourceUrl,
