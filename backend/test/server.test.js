@@ -219,6 +219,55 @@ test('stream resolution is shared concurrently and cached until the source URL e
   assert.equal(spawnCount, 1);
 });
 
+test('prefetch endpoint warms the resolution cache used by the stream endpoint', async (t) => {
+  const expectedUrl = `https://r1---sn.googlevideo.com/videoplayback?expire=${Math.floor(Date.now() / 1000) + 600}`;
+  let spawnCount = 0;
+  const spawnProcess = () => {
+    spawnCount += 1;
+    const process = new EventEmitter();
+    process.exitCode = null;
+    process.signalCode = null;
+    process.stdout = new PassThrough();
+    process.stderr = new PassThrough();
+    process.kill = () => true;
+    setImmediate(() => {
+      process.stdout.end(JSON.stringify({ url: expectedUrl }));
+      process.exitCode = 0;
+      process.emit('close', 0);
+    });
+    return process;
+  };
+  const requestUpstream = (_url, _options, onResponse) => {
+    const request = new EventEmitter();
+    request.end = () => setImmediate(() => {
+      const response = new PassThrough();
+      response.statusCode = 200;
+      response.headers = {};
+      onResponse(response);
+      response.end('audio-data');
+    });
+    request.destroy = () => {};
+    return request;
+  };
+  const server = createApp({ spawnProcess, requestUpstream, downloaderPath: 'yt-dlp-test' }).listen(0, '127.0.0.1');
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await new Promise((resolve) => server.once('listening', resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const prefetchResponse = await fetch(`${baseUrl}/prefetch/abcdefghijk?profile=dataSaver`);
+  assert.equal(prefetchResponse.status, 202);
+  assert.deepEqual(await prefetchResponse.json(), { status: 'miss' });
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const streamResponse = await fetch(`${baseUrl}/stream/abcdefghijk?profile=dataSaver`);
+  assert.equal(streamResponse.status, 200);
+  await streamResponse.arrayBuffer();
+  assert.equal(spawnCount, 1);
+
+  const invalidResponse = await fetch(`${baseUrl}/prefetch/not-a-video-id`);
+  assert.equal(invalidResponse.status, 400);
+});
+
 test('stream endpoint returns 503 when the resolver capacity is exhausted', async (t) => {
   let blockedProcess;
   const spawnProcess = () => {

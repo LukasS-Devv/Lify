@@ -10,7 +10,17 @@ export function usePlaylists() {
     await state.reload();
     return id;
   }, [state.reload]);
-  return { ...state, create };
+  const setPinned = useCallback(async (id: number, pinned: boolean) => {
+    await playlistsRepo.setPlaylistPinned(await getDb(), id, pinned);
+    await state.reload();
+  }, [state.reload]);
+  return { ...state, create, setPinned };
+}
+
+const NO_MEMBERSHIP = new Map<string, number>();
+
+export function usePlaylistByTrack() {
+  return useFocusLoad<Map<string, number>>(async () => playlistsRepo.playlistByTrack(await getDb()), NO_MEMBERSHIP);
 }
 
 export function usePlaylistDetail(id: number) {
@@ -24,6 +34,10 @@ export function usePlaylistDetail(id: number) {
     await state.reload();
   }, [id, state.reload]);
   const remove = useCallback(async () => playlistsRepo.deletePlaylist(await getDb(), id), [id]);
+  const setPinned = useCallback(async (pinned: boolean) => {
+    await playlistsRepo.setPlaylistPinned(await getDb(), id, pinned);
+    await state.reload();
+  }, [id, state.reload]);
   const removeTrack = useCallback(async (t: Track) => {
     await playlistsRepo.removeTrackFromPlaylist(await getDb(), id, t.id);
     await state.reload();
@@ -33,5 +47,5 @@ export function usePlaylistDetail(id: number) {
     await state.reload();
   }, [id, state.reload]);
 
-  return { ...state, rename, remove, removeTrack, move };
+  return { ...state, rename, remove, setPinned, removeTrack, move };
 }

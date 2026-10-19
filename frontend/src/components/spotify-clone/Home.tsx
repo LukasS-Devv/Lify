@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useRouter } from 'expo-router';
+import type { LibraryCategory } from './LibraryRelated';
 import { EmptyState } from '@/components';
 import { useFavorites, useHistory } from '@/features/library/useLibrary';
-import { usePlaylists } from '@/features/playlists/usePlaylists';
+import { usePlaylistByTrack, usePlaylists } from '@/features/playlists/usePlaylists';
+import { buildRecentEntries, interleaveUnique } from '@/utils/recent';
 import { catalog } from '@/services/catalog';
 import type { CatalogArtist } from '@/services/catalog/types';
 import type { Track } from '@/types';
@@ -15,22 +17,30 @@ import { Slider } from './Slider';
 import type { CardItem } from './Card';
 import { BrowseCategory, GENRE_PLACEHOLDERS } from './BrowseCategory';
 import { ArtworkImage } from '../ArtworkImage';
-import { useStartupStore } from '@/services/startup';
 
 const GENRE_COLORS = ['#248fcf', '#7811b3', '#a1727e', '#6eaf78', '#58428b', '#21b47a', '#8158e6', '#db6953'];
 
 const ARTIST_LOOKUP_LIMIT = 4;
 
-export function Home({ onReady }: { onReady?: (ready: boolean) => void }) {
+export function Home() {
   useTranslation();
   const router = useRouter();
+  const openLibrary = (category: LibraryCategory) => router.navigate({
+    pathname: '/library',
+    params: { category, nonce: String(Date.now()) },
+  });
   const { width } = useWindowDimensions();
-  const history = useHistory(30);
+  const history = useHistory(100);
   const favorites = useFavorites();
   const playlists = usePlaylists();
-  const hasLoadedHome = useStartupStore((state) => state.hasLoadedHome);
+  const playlistByTrack = usePlaylistByTrack();
   const tracks = useMemo(() => history.data.map(({ track }) => track), [history.data]);
-  const recentItems = tracks.slice(0, 8);
+  // Chave estável: o foco recria os arrays, mas só o conteúdo real deve disparar buscas.
+  const historyKey = history.data.map(({ track }) => track.id).join('|');
+  const recentEntries = useMemo(() => {
+    const playlistsById = new Map(playlists.data.map((playlist) => [playlist.id, playlist] as const));
+    return buildRecentEntries(history.data, playlistByTrack.data, playlistsById);
+  }, [history.data, playlistByTrack.data, playlists.data]);
   const artistNames = useMemo(() => {
     const counts = new Map<string, { name: string; count: number }>();
     for (const track of [...tracks, ...favorites.data]) {
@@ -42,17 +52,18 @@ export function Home({ onReady }: { onReady?: (ready: boolean) => void }) {
     }
     return [...counts.values()].sort((a, b) => b.count - a.count).slice(0, 8);
   }, [favorites.data, tracks]);
+  const artistKey = artistNames.map(({ name }) => name).join('\n');
   const [topArtists, setTopArtists] = useState<CatalogArtist[]>([]);
   const [artistsLoading, setArtistsLoading] = useState(false);
   const [artistsError, setArtistsError] = useState<string | null>(null);
   const [artistsRetry, setArtistsRetry] = useState(0);
   const [recommended, setRecommended] = useState<Track[]>([]);
   const [recommendationError, setRecommendationError] = useState<string | null>(null);
-  const homeReady = !history.loading && !favorites.loading && !playlists.loading;
 
   useEffect(() => {
     if (history.loading || favorites.loading) return;
-    if (!artistNames.length) {
+    const names = artistKey ? artistKey.split('\n') : [];
+    if (!names.length) {
       setTopArtists([]);
       setArtistsError(null);
       setArtistsLoading(false);
@@ -60,44 +71,49 @@ export function Home({ onReady }: { onReady?: (ready: boolean) => void }) {
     }
 
     let active = true;
-    setArtistsLoading(true);
-    setArtistsError(null);
-    const artistMatches: (CatalogArtist | undefined)[] = [];
-    let hadArtistFailure = false;
-    const lookups = artistNames.slice(0, ARTIST_LOOKUP_LIMIT).map(async ({ name }, index) => {
-      let match: CatalogArtist = { id: 'search', name, subtitle: '', imageUrl: null };
-      try {
-        const results = await catalog.searchArtists(name);
-        const query = name.toLocaleLowerCase();
-        match = results.find((candidate) => candidate.name.toLocaleLowerCase() === query)
-          ?? results[0]
-          ?? match;
-      } catch (error) {
-        hadArtistFailure = true;
-        console.warn(`[home] Could not find artist "${name}"`, error);
-      }
+    // Rede só depois da primeira renderização, para não travar a abertura.
+    const task = setTimeout(() => {
       if (!active) return;
-      artistMatches[index] = match;
-      const seen = new Set<string>();
-      setTopArtists(artistMatches.filter((artist): artist is CatalogArtist => artist !== undefined).filter((artist) => {
-        const key = artist.id === 'search' ? artist.name.toLocaleLowerCase() : artist.id;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      }));
-    });
-    void Promise.all(lookups)
-      .then(() => {
-        if (active) setArtistsError(hadArtistFailure ? t('artist.searchFailed') : null);
-      })
-      .finally(() => {
-        if (active) {
-          setArtistsLoading(false);
+      setArtistsLoading(true);
+      setArtistsError(null);
+      const artistMatches: (CatalogArtist | undefined)[] = [];
+      let hadArtistFailure = false;
+      const lookups = names.slice(0, ARTIST_LOOKUP_LIMIT).map(async (name, index) => {
+        let match: CatalogArtist = { id: 'search', name, subtitle: '', imageUrl: null };
+        try {
+          const results = await catalog.searchArtists(name);
+          const query = name.toLocaleLowerCase();
+          match = results.find((candidate) => candidate.name.toLocaleLowerCase() === query)
+            ?? results[0]
+            ?? match;
+        } catch (error) {
+          hadArtistFailure = true;
+          console.warn(`[home] Could not find artist "${name}"`, error);
         }
+        if (!active) return;
+        artistMatches[index] = match;
+        const seen = new Set<string>();
+        setTopArtists(artistMatches.filter((artist): artist is CatalogArtist => artist !== undefined).filter((artist) => {
+          const key = artist.id === 'search' ? artist.name.toLocaleLowerCase() : artist.id;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }));
       });
+      void Promise.all(lookups)
+        .then(() => {
+          if (active) setArtistsError(hadArtistFailure ? t('artist.searchFailed') : null);
+        })
+        .finally(() => {
+          if (active) setArtistsLoading(false);
+        });
+    }, 0);
 
-    return () => { active = false; };
-  }, [artistNames, artistsRetry, favorites.loading, history.loading]);
+    return () => {
+      active = false;
+      clearTimeout(task);
+    };
+  }, [artistKey, artistsRetry, favorites.loading, history.loading]);
 
   useEffect(() => {
     let current = true;
@@ -111,28 +127,29 @@ export function Home({ onReady }: { onReady?: (ready: boolean) => void }) {
       return () => { current = false; };
     }
 
-    const suggestions = new Map<string, Track>();
-    const lookups = seeds.map(async (track) => {
-      try {
-        const related = await catalog.getRelated(track);
-        if (!current) return;
-        for (const suggestion of related) {
-          if (!listened.has(suggestion.id)) suggestions.set(suggestion.id, suggestion);
+    const task = setTimeout(() => {
+      const suggestions = new Map<string, Track>();
+      const lookups = seeds.map(async (track) => {
+        try {
+          const related = await catalog.getRelated(track);
+          if (!current) return;
+          for (const suggestion of related) {
+            if (!listened.has(suggestion.id)) suggestions.set(suggestion.id, suggestion);
+          }
+          setRecommended([...suggestions.values()].slice(0, 12));
+        } catch (error) {
+          console.warn('[home] Could not load related tracks', error);
+          if (current && !suggestions.size) setRecommendationError(t('home.recommendationsFailed'));
         }
-        setRecommended([...suggestions.values()].slice(0, 12));
-      } catch (error) {
-        console.warn('[home] Could not load related tracks', error);
-        if (current && !suggestions.size) setRecommendationError(t('home.recommendationsFailed'));
-      }
-    });
-    void Promise.all(lookups);
+      });
+      void Promise.all(lookups);
+    }, 0);
 
-    return () => { current = false; };
-  }, [history.data, history.loading]);
-
-  useEffect(() => {
-    onReady?.(homeReady);
-  }, [homeReady, onReady]);
+    return () => {
+      current = false;
+      clearTimeout(task);
+    };
+  }, [historyKey, history.loading]);
 
   const favoriteCards: CardItem[] = favorites.data.slice(0, 12).map((track, index) => ({
     id: `favorite-${track.id}`,
@@ -148,20 +165,29 @@ export function Home({ onReady }: { onReady?: (ready: boolean) => void }) {
     imageUrl: playlist.coverUrl ?? undefined,
     onPress: () => router.push({ pathname: '/playlist/[id]', params: { id: String(playlist.id) } }),
   }));
-  const recentCards: CardItem[] = tracks.slice(0, 12).map((track, index) => ({
-    id: `recent-${track.id}-${index}`,
-    title: track.title,
-    subtitle: track.artist,
-    imageUrl: track.artworkUrl,
-    onPress: () => playQueue(tracks, index),
-  }));
+  const recentCards: CardItem[] = recentEntries.map((entry) => entry.kind === 'track'
+    ? {
+        id: entry.key,
+        title: entry.track.title,
+        subtitle: entry.track.artist,
+        imageUrl: entry.track.artworkUrl,
+        onPress: () => playQueue(tracks, entry.queueIndex),
+      }
+    : {
+        id: entry.key,
+        title: entry.playlist.name,
+        subtitle: t('common.tracks', { count: entry.playlist.trackCount }),
+        imageUrl: entry.playlist.coverUrl ?? undefined,
+        onPress: () => router.push({ pathname: '/playlist/[id]', params: { id: String(entry.playlist.id) } }),
+      });
   const artistCards: CardItem[] = topArtists.map((artist) => ({
-    id: artist.id,
+    id: artist.id === 'search' ? `artist-name-${artist.name.toLocaleLowerCase()}` : `artist-${artist.id}`,
     title: artist.name,
     subtitle: artist.subtitle || undefined,
     imageUrl: artist.imageUrl ?? undefined,
     onPress: () => router.push({ pathname: '/artist/[id]', params: { id: artist.id, name: artist.name } }),
   }));
+  const gridItems = interleaveUnique<CardItem>([recentCards, playlistCards, artistCards], 8, (item) => item.id);
   const recommendedCards: CardItem[] = recommended.map((track, index) => ({
     id: `recommended-${track.id}`,
     title: track.title,
@@ -170,28 +196,19 @@ export function Home({ onReady }: { onReady?: (ready: boolean) => void }) {
     onPress: () => playQueue(recommended, index),
   }));
 
-  if (!homeReady && !hasLoadedHome) {
-    return (
-      <View style={s.loading}>
-        <ActivityIndicator size="large" color={colors.accent} />
-        <Text style={s.loadingText}>{t('app.starting')}</Text>
-      </View>
-    );
-  }
-
   return (
     <View style={s.container}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         <View style={s.recentGrid}>
-          {recentItems.map((track, index) => (
+          {gridItems.map((item) => (
             <Pressable
-              key={`${track.id}-${index}`}
+              key={item.id}
               accessibilityRole="button"
-              onPress={() => playQueue(tracks, index)}
+              onPress={item.onPress}
               style={({ pressed }) => [s.recentTile, { width: width / 2 - 20 }, pressed && s.pressed]}
             >
-              <ArtworkImage uri={track.artworkUrl} style={s.recentCover} />
-              <Text numberOfLines={2} style={s.recentTitle}>{track.title}</Text>
+              <ArtworkImage uri={item.imageUrl} style={s.recentCover} />
+              <Text numberOfLines={2} style={s.recentTitle}>{item.title}</Text>
             </Pressable>
           ))}
         </View>
@@ -199,7 +216,7 @@ export function Home({ onReady }: { onReady?: (ready: boolean) => void }) {
         {recentCards.length ? (
           <Slider
             title={t('home.recent')}
-            items={recentCards}
+            items={recentCards.slice(0, 12)}
             onShowAll={() => router.push('/recent')}
             showAllLabel={t('common.seeMore')}
           />
@@ -226,10 +243,10 @@ export function Home({ onReady }: { onReady?: (ready: boolean) => void }) {
           </View>
         ) : null}
         {favoriteCards.length ? (
-          <Slider title={t('library.tab.liked')} items={favoriteCards} onShowAll={() => router.push('/library')} showAllLabel={t('common.seeAll')} />
+          <Slider title={t('library.tab.liked')} items={favoriteCards} onShowAll={() => openLibrary('favorites')} showAllLabel={t('common.seeAll')} />
         ) : null}
         {playlistCards.length ? (
-          <Slider title={t('home.playlists')} items={playlistCards} onShowAll={() => router.push('/playlists')} showAllLabel={t('common.seeAll')} />
+          <Slider title={t('home.playlists')} items={playlistCards} onShowAll={() => openLibrary('playlists')} showAllLabel={t('common.seeAll')} />
         ) : tracks.length || favoriteCards.length ? (
           <Pressable accessibilityRole="button" onPress={() => router.push('/playlists')} style={s.createPlaylist}>
             <Text style={s.createGlyph}>＋</Text>
@@ -268,8 +285,6 @@ export function Home({ onReady }: { onReady?: (ready: boolean) => void }) {
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, backgroundColor: colors.bg },
-  loadingText: { color: colors.textMuted, fontSize: font.md },
   scroll: { paddingVertical: spacing.md, paddingBottom: spacing.xl },
   recentGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingHorizontal: spacing.md, marginBottom: spacing.lg },
   recentTile: { height: 56, flexDirection: 'row', alignItems: 'center', overflow: 'hidden', borderRadius: radius.sm, backgroundColor: colors.surfaceAlt },

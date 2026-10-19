@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { PlaylistSummary, Track } from '@/types';
 import { favoritesRepo, getDb, playlistsRepo } from '@/database';
+import { toggleFavoriteWithFeedback } from '@/features/favorites/favoriteFeedback';
 import { addToQueueEnd, addToQueueNext } from '@/services/audio/controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { t, useTranslation } from '@/i18n';
@@ -68,9 +69,9 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
         ) : (
           <>
             <Item icon={fav ? 'heart' : 'heart-outline'} showIcon={showIcons} label={fav ? t('actions.unlike') : t('actions.like')} onPress={() => run(async () => {
-              const now = await favoritesRepo.toggleFavorite(await getDb(), track);
+              const now = await toggleFavoriteWithFeedback(track);
               setFav(now);
-              return now ? t('actions.liked') : t('actions.unliked');
+              return now ? undefined : t('actions.unliked');
             })} />
             <Item icon="add-circle-outline" showIcon={showIcons} label={t('actions.addToPlaylist')} onPress={() => setShowLists(true)} />
             <Item icon="play-forward-outline" showIcon={showIcons} label={t('actions.playNext')} onPress={() => run(() => { addToQueueNext(track); return t('actions.queued'); })} />

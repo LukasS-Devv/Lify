@@ -77,6 +77,18 @@ export const migrations: Migration[] = [
       CREATE INDEX idx_catalog_cache_updated_at ON catalog_cache(updated_at DESC);
     `,
   },
+  {
+    version: 4,
+    name: 'blank-unknown-artist',
+    // Limpa o placeholder antigo ("Artista desconhecido"/"Unknown artist") gravado
+    // em faixas sem artista; agora a UI mostra o campo vazio.
+    sql: `UPDATE tracks SET artist = '' WHERE artist IN ('Artista desconhecido', 'Unknown artist');`,
+  },
+  {
+    version: 5,
+    name: 'playlist-pins',
+    sql: `ALTER TABLE playlists ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;`,
+  },
 ];
 
 export const LATEST_VERSION = migrations[migrations.length - 1].version;

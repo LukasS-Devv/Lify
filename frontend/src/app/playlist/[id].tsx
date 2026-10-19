@@ -25,7 +25,7 @@ export default function PlaylistDetail() {
   const playlistId = Number(id);
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { data, loading, rename, remove, removeTrack, move } = usePlaylistDetail(playlistId);
+  const { data, loading, rename, remove, setPinned, removeTrack, move } = usePlaylistDetail(playlistId);
   const current = usePlayerStore(selectCurrentTrack);
   const [menuTrack, setMenuTrack] = useState<Track | null>(null);
   const [sheet, setSheet] = useState(false);
@@ -53,6 +53,11 @@ export default function PlaylistDetail() {
 
   const items: SheetItem[] = [
     { icon: 'create-outline', label: t('common.rename'), onPress: () => { setRenameError(null); setRenaming(true); } },
+    ...(playlist ? [{
+      icon: playlist.pinned ? 'pin' as const : 'pin-outline' as const,
+      label: playlist.pinned ? t('playlist.unpin') : t('playlist.pin'),
+      onPress: () => void setPinned(!playlist.pinned),
+    }] : []),
     { icon: 'swap-vertical', label: reordering ? t('playlist.doneReordering') : t('playlist.reorder'), onPress: () => setReordering((r) => !r) },
     ...(tracks.length ? [{ icon: 'list-outline' as const, label: t('playlist.addToQueue'), onPress: () => addToQueueEnd(tracks) }] : []),
     { icon: 'trash-outline', label: t('common.delete'), danger: true, onPress: confirmDelete },

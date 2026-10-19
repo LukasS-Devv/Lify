@@ -34,7 +34,7 @@ export function makeTrack(input: {
     source: 'youtube',
     sourceId: input.sourceId,
     title: input.title || t('track.untitled'),
-    artist: input.artist || t('track.unknownArtist'),
+    artist: input.artist ?? '',
     album: input.album ?? null,
     durationSec: input.durationSec ?? null,
     artworkUrl: thumbnailFor(input.sourceId),

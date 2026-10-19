@@ -21,11 +21,29 @@ function ensureBackupDir(): Directory {
   return dir;
 }
 
+/**
+ * Bytes 18 e 19 do cabeçalho SQLite indicam o modo de journal (2 = WAL).
+ * `deserialize` não aceita WAL, então forçamos o modo rollback (1).
+ */
+function normalizeSqliteHeader(bytes: Uint8Array): Uint8Array {
+  if (bytes[18] !== 2 && bytes[19] !== 2) return bytes;
+  const fixed = bytes.slice();
+  fixed[18] = 1;
+  fixed[19] = 1;
+  return fixed;
+}
+
 /** Serializa o banco atual para um arquivo .db dentro de documents/backups. */
 export async function createBackupFile(prefix?: string): Promise<File> {
   const db = await getDb();
   await db.execAsync('PRAGMA wal_checkpoint(TRUNCATE)');
-  const bytes = await db.serializeAsync();
+  await db.execAsync('PRAGMA journal_mode = DELETE');
+  let bytes: Uint8Array;
+  try {
+    bytes = await db.serializeAsync();
+  } finally {
+    await db.execAsync('PRAGMA journal_mode = WAL');
+  }
   const file = new File(ensureBackupDir(), backupFileName(prefix));
   file.create({ overwrite: true });
   file.write(bytes);
@@ -74,7 +92,7 @@ export async function importBackup(): Promise<ImportResult> {
 export async function importFromBytes(bytes: Uint8Array): Promise<ImportResult> {
   let incoming: SQLite.SQLiteDatabase;
   try {
-    incoming = await SQLite.deserializeDatabaseAsync(bytes);
+    incoming = await SQLite.deserializeDatabaseAsync(normalizeSqliteHeader(bytes));
     const v = await incoming.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
     if ((v?.user_version ?? 0) > LATEST_VERSION) {
       await incoming.closeAsync();

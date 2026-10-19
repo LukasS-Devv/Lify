@@ -1,23 +1,40 @@
 import { getDb } from '@/database';
+import { isFresh, MAX_CACHE_ENTRIES, shouldCache } from './cachePolicy';
 
 interface CacheRow {
   value: string;
   expires_at: number;
 }
 
-const MAX_CACHE_ENTRIES = 200;
 const pending = new Map<string, Promise<unknown>>();
 
-async function readCache<T>(key: string): Promise<{ value: T; fresh: boolean } | null> {
+/** Remove a linha corrompida para que ela não seja lida (e falhe) para sempre. */
+async function evict(key: string): Promise<void> {
   try {
-    const row = await (await getDb()).getFirstAsync<CacheRow>(
+    await (await getDb()).runAsync('DELETE FROM catalog_cache WHERE cache_key = ?', key);
+  } catch (error) {
+    console.warn('[catalog-cache] Could not evict a corrupt cache entry', error);
+  }
+}
+
+async function readCache<T>(key: string): Promise<{ value: T; fresh: boolean } | null> {
+  let row: CacheRow | null = null;
+  try {
+    row = await (await getDb()).getFirstAsync<CacheRow>(
       'SELECT value, expires_at FROM catalog_cache WHERE cache_key = ?',
       key,
     );
-    if (!row) return null;
-    return { value: JSON.parse(row.value) as T, fresh: row.expires_at > Date.now() };
   } catch (error) {
     console.warn('[catalog-cache] Could not read cached catalog data', error);
+    return null;
+  }
+  if (!row) return null;
+
+  try {
+    return { value: JSON.parse(row.value) as T, fresh: isFresh(row.expires_at) };
+  } catch (error) {
+    console.warn('[catalog-cache] Dropping a corrupt cache entry', key, error);
+    await evict(key);
     return null;
   }
 }
@@ -26,6 +43,11 @@ async function writeCache(key: string, value: unknown, ttlMs: number): Promise<v
   try {
     const db = await getDb();
     const now = Date.now();
+    const serialized = JSON.stringify(value);
+    if (!shouldCache(serialized)) {
+      console.warn('[catalog-cache] Skipping an oversized cache entry', key, serialized.length);
+      return;
+    }
     await db.runAsync(
       `INSERT INTO catalog_cache (cache_key, value, expires_at, updated_at)
        VALUES (?, ?, ?, ?)
@@ -34,16 +56,18 @@ async function writeCache(key: string, value: unknown, ttlMs: number): Promise<v
          expires_at = excluded.expires_at,
          updated_at = excluded.updated_at`,
       key,
-      JSON.stringify(value),
+      serialized,
       now + ttlMs,
       now,
     );
+    // Poda por quantidade e por validade: entradas vencidas nunca são relidas.
     await db.runAsync(
       `DELETE FROM catalog_cache
-       WHERE cache_key IN (
+       WHERE expires_at <= ? OR cache_key IN (
          SELECT cache_key FROM catalog_cache
          ORDER BY updated_at DESC LIMIT -1 OFFSET ?
        )`,
+      now,
       MAX_CACHE_ENTRIES,
     );
   } catch (error) {

@@ -16,6 +16,8 @@ export { TrackActionsModal } from './TrackActionsModal';
 export { TextPromptModal } from './TextPromptModal';
 export { SleepTimerModal } from './SleepTimerModal';
 export { ImportPlaylistModal } from './ImportPlaylistModal';
+export { PlaylistPickerModal } from './PlaylistPickerModal';
+export { FavoriteToast } from './FavoriteToast';
 export { ActionSheet } from './ActionSheet';
 export type { SheetItem } from './ActionSheet';
 export { PlayAllBar } from './PlayAllBar';

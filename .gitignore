@@ -13,3 +13,4 @@ coverage/
 !/functions/node_modules/.package-lock.json
 /backend/node_modules
 *.apk
+/builds

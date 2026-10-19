@@ -1,4 +1,4 @@
-export { getDb, runMigrations, DB_NAME } from './client';
+export { getDb, runMigrations, resetDatabase, DB_NAME } from './client';
 export type { Db } from './types';
 export * as tracksRepo from './repositories/tracks';
 export * as playlistsRepo from './repositories/playlists';

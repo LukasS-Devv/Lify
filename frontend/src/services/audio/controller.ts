@@ -3,15 +3,16 @@ import TrackPlayer, {
   Capability,
   Event,
   State,
+  type Track as NativeTrack,
 } from 'react-native-track-player';
 import { catalog } from '@/services/catalog';
 import { getDb, historyRepo, settingsRepo } from '@/database';
 import type { RepeatMode, Track } from '@/types';
 import {
-  currentOf, enqueue as qEnqueue, nextIndex, playNext as qPlayNext, prevIndex,
-  removeAt, setQueue, shuffleRest, emptyQueue,
+  currentOf, appendRecommended, dropRecommended, nextIndex, playNext as qPlayNext, prevIndex,
+  enqueue as qEnqueue, removeAt, setQueue, shuffleRest, emptyQueue,
 } from './queue';
-import { usePlayerStore } from './store';
+import { usePlayerStore, type PlayerStatus } from './store';
 import { t as tr } from '@/i18n';
 
 const store = () => usePlayerStore.getState();
@@ -19,6 +20,7 @@ let setupDone: Promise<void> | null = null;
 let retriedFor: string | null = null; // faixa que já teve 1 retry automático
 let lastNativeError = '';
 let loadToken = 0; // invalida carregamentos antigos quando o usuário pula rápido
+let consecutiveFailures = 0; // falhas seguidas sem nenhuma faixa começar a tocar
 let nativeOperations: Promise<void> = Promise.resolve();
 let sleepTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -78,7 +80,8 @@ export function setupAudio(): Promise<void> {
       try {
         await TrackPlayer.setupPlayer({
           autoHandleInterruptions: true,
-          minBuffer: dataSaver ? 5 : 30,
+          // minBuffer deve ser >= ao buffer de recuperação do ExoPlayer (5s por padrão)
+          minBuffer: dataSaver ? 10 : 30,
           maxBuffer: dataSaver ? 15 : 30,
           playBuffer: 3,
           backBuffer: 0,
@@ -89,7 +92,8 @@ export function setupAudio(): Promise<void> {
       }
       store().set({ repeat: settings.repeatMode, autoQueue: settings.autoQueue });
       await TrackPlayer.updateOptions({
-        android: { appKilledPlaybackBehavior: AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification },
+        // Mantém a música e a notificação do player ao fechar o app pelos recentes.
+        android: { appKilledPlaybackBehavior: AppKilledPlaybackBehavior.ContinuePlayback },
         capabilities: [
           Capability.Play, Capability.Pause, Capability.SkipToNext,
           Capability.SkipToPrevious, Capability.SeekTo, Capability.Stop,
@@ -103,6 +107,51 @@ export function setupAudio(): Promise<void> {
     });
   }
   return setupDone;
+}
+
+/**
+ * Ao reabrir o app a fila em memória está vazia, mas o TrackPlayer nativo pode ainda
+ * ter a fila tocando/pausada. Reconstrói o store a partir dele para o mini player voltar.
+ */
+export async function restoreNativeQueue(): Promise<void> {
+  await setupAudio();
+  if (store().queue.items.length > 0) return;
+
+  const [nativeItems, index, playback] = await serializeNative(() => Promise.all([
+    TrackPlayer.getQueue(),
+    TrackPlayer.getActiveTrackIndex(),
+    TrackPlayer.getPlaybackState(),
+  ]));
+  if (nativeItems.length === 0 || index === undefined || index < 0 || index >= nativeItems.length) return;
+  if (store().queue.items.length > 0) return;
+
+  store().set({
+    queue: { items: nativeItems.map(nativeToTrack), index },
+    status: statusFromNative(playback.state),
+    error: null,
+  });
+}
+
+function nativeToTrack(n: NativeTrack): Track {
+  const id = String(n.id ?? '');
+  const sep = id.indexOf(':');
+  return {
+    id,
+    source: 'youtube',
+    sourceId: sep >= 0 ? id.slice(sep + 1) : id,
+    title: n.title ?? '',
+    artist: n.artist ?? '',
+    album: n.album ?? null,
+    durationSec: typeof n.duration === 'number' ? n.duration : null,
+    artworkUrl: typeof n.artwork === 'string' ? n.artwork : '',
+  };
+}
+
+function statusFromNative(state: State): PlayerStatus {
+  if (state === State.Playing) return 'playing';
+  if (state === State.Paused || state === State.Ready) return 'paused';
+  if (state === State.Buffering || state === State.Loading) return 'buffering';
+  return 'idle';
 }
 
 /* ---------------------------- reprodução ---------------------------- */
@@ -125,7 +174,7 @@ async function loadAndPlay(track: Track, startAt = 0, isRetry = false): Promise<
         url: stream.url,
         contentType: stream.mimeType?.split(';')[0],
         title: track.title,
-        artist: track.artist,
+        artist: track.artist || undefined,
         album: track.album ?? undefined,
         artwork: track.artworkUrl,
         duration: track.durationSec ?? undefined,
@@ -139,12 +188,27 @@ async function loadAndPlay(track: Track, startAt = 0, isRetry = false): Promise<
     if (token !== loadToken) return;
     if (!isRetry) {
       void recordHistory(track);
-      void maybeFillQueue();
+      void maybeFillQueue().catch(() => {}).then(prefetchNext);
     }
   } catch (e) {
     if (token !== loadToken) return;
-    store().set({ status: 'error', error: e instanceof Error ? e.message : tr('player.error') });
+    await onTrackFailed(e instanceof Error ? e.message : tr('player.error'));
   }
+}
+
+/**
+ * Pula para a próxima faixa após uma falha (mantém a notificação e a reprodução).
+ * Para quando já falharam todas as faixas da fila, evitando loop infinito com repeat "all".
+ */
+async function onTrackFailed(message: string): Promise<void> {
+  const { queue, repeat } = store();
+  consecutiveFailures++;
+  const i = consecutiveFailures < queue.items.length ? nextIndex(queue, repeat, true) : null;
+  if (i === null) {
+    store().set({ status: 'error', error: message });
+    return;
+  }
+  await skipTo(i);
 }
 
 async function recordHistory(track: Track) {
@@ -155,10 +219,18 @@ async function recordHistory(track: Track) {
   } catch { /* histórico é best-effort */ }
 }
 
-/** Fila automática: ao tocar a última faixa, anexa relacionadas. */
+/** Pré-resolve a próxima faixa para que a transição não espere pelo servidor. */
+function prefetchNext() {
+  const { queue, repeat } = store();
+  const i = nextIndex(queue, repeat, false);
+  const upcoming = i === null ? null : queue.items[i];
+  if (upcoming) void catalog.prefetch(upcoming);
+}
+
+/** Fila automática: ao tocar a última faixa, anexa relacionadas (não com repeat "all", que repete a playlist). */
 async function maybeFillQueue() {
-  const { queue, autoQueue } = store();
-  if (!autoQueue || queue.index < queue.items.length - 1) return;
+  const { queue, autoQueue, repeat } = store();
+  if (!autoQueue || repeat === 'all' || queue.index < queue.items.length - 1) return;
   const cur = currentOf(queue);
   if (!cur) return;
   const related = await catalog.getRelated(cur);
@@ -166,7 +238,7 @@ async function maybeFillQueue() {
   if (currentOf(now)?.id !== cur.id) return; // mudou enquanto buscava
   const known = new Set(now.items.map((t) => t.id));
   const fresh = related.filter((t) => !known.has(t.id));
-  if (fresh.length) store().set({ queue: qEnqueue(now, fresh) });
+  if (fresh.length) store().set({ queue: appendRecommended(now, fresh) });
 }
 
 /** Toca `tracks` a partir de `startIndex`, substituindo a fila. */
@@ -259,12 +331,14 @@ export function addToQueueNext(track: Track) {
   const wasEmpty = store().queue.items.length === 0;
   store().set({ queue: qPlayNext(store().queue, track) });
   if (wasEmpty) void loadAndPlay(track);
+  else prefetchNext();
 }
 
 export function addToQueueEnd(tracks: Track[]) {
   const wasEmpty = store().queue.items.length === 0;
   store().set({ queue: qEnqueue(store().queue, tracks) });
   if (wasEmpty) void loadAndPlay(tracks[0]);
+  else prefetchNext();
 }
 
 export async function removeFromQueue(index: number): Promise<void> {
@@ -276,31 +350,50 @@ export async function removeFromQueue(index: number): Promise<void> {
     const t = currentOf(q);
     if (t) await loadAndPlay(t);
     else await stop();
+  } else {
+    prefetchNext();
   }
 }
 
 export function shuffleUpcoming() {
   store().set({ queue: shuffleRest(store().queue) });
+  prefetchNext();
 }
 
 export async function setRepeat(mode: RepeatMode) {
   store().set({ repeat: mode });
+  if (mode === 'all') store().set({ queue: dropRecommended(store().queue) });
+  prefetchNext();
+  if (mode !== 'all') void maybeFillQueue().catch(() => {}).then(prefetchNext);
   try { await settingsRepo.saveSetting(await getDb(), 'repeatMode', mode); } catch { /* */ }
 }
 
 export async function setAutoQueue(on: boolean) {
   store().set({ autoQueue: on });
   try { await settingsRepo.saveSetting(await getDb(), 'autoQueue', on); } catch { /* */ }
-  if (on) void maybeFillQueue();
+  if (on) void maybeFillQueue().catch(() => {}).then(prefetchNext);
 }
 
 /* ------------------------- eventos do player ------------------------- */
 
+/**
+ * Fim da faixa nativa. Um evento atrasado (enquanto a próxima faixa ainda carrega, ou de uma
+ * faixa já substituída) não pode avançar a fila de novo, senão a faixa seguinte é pulada.
+ */
+async function onQueueEnded(): Promise<void> {
+  const cur = currentOf(store().queue);
+  if (!cur || store().status === 'loading') return;
+  const active = await TrackPlayer.getActiveTrack().catch(() => undefined);
+  if (active && String(active.id) !== cur.id) return;
+  await next(false);
+}
+
 /** Registrado pelo playbackService (roda também em background/headless). */
 export function attachPlayerEvents() {
-  TrackPlayer.addEventListener(Event.PlaybackQueueEnded, () => { void next(false); });
+  TrackPlayer.addEventListener(Event.PlaybackQueueEnded, () => { void onQueueEnded(); });
 
   TrackPlayer.addEventListener(Event.PlaybackState, ({ state }) => {
+    if (state === State.Playing) consecutiveFailures = 0;
     const cur = store().status;
     if (cur === 'loading' || cur === 'error') {
       if (state === State.Playing) store().set({ status: 'playing' });
@@ -322,7 +415,7 @@ export function attachPlayerEvents() {
       const { position } = await TrackPlayer.getProgress().catch(() => ({ position: 0 }));
       await loadAndPlay(t, position, true);
     } else {
-      store().set({ status: 'error', error: tr('player.errorTrack', { detail: lastNativeError }) });
+      await onTrackFailed(tr('player.errorTrack', { detail: lastNativeError }));
     }
   });
 

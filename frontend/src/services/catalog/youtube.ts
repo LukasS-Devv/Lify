@@ -1,5 +1,4 @@
-// Importa o build para React Native do youtubei.js.
-import { Innertube } from 'youtubei.js/react-native';
+import type { Innertube } from 'youtubei.js/react-native';
 import type { Track } from '@/types';
 import { makeTrack } from '@/utils/track';
 import {
@@ -21,13 +20,16 @@ let innertube: Promise<Innertube> | null = null;
 
 function getClient(): Promise<Innertube> {
   if (!innertube) {
-    innertube = Innertube.create({
-      retrieve_player: true,
-      generate_session_locally: true,
-    }).catch((e: unknown) => {
-      innertube = null;
-      throw new CatalogError(t('catalog.clientFailed'), 'network');
-    });
+    // Carregado sob demanda: evita parsear o youtubei.js na abertura do app.
+    innertube = import('youtubei.js/react-native')
+      .then(({ Innertube }) => Innertube.create({
+        retrieve_player: true,
+        generate_session_locally: true,
+      }))
+      .catch((e: unknown) => {
+        innertube = null;
+        throw new CatalogError(t('catalog.clientFailed'), 'network');
+      });
   }
   return innertube;
 }
@@ -297,6 +299,17 @@ export const youtubeCatalog: CatalogProvider = {
       mimeType: null,
       expiresAt: null,
     };
+  },
+
+  async prefetch(track) {
+    if (!/^[\w-]{11}$/.test(track.sourceId)) return;
+    try {
+      const settings = await settingsRepo.loadSettings(await getDb());
+      const baseUrl = getStreamServerUrl(settings);
+      await fetch(`${baseUrl}/prefetch/${encodeURIComponent(track.sourceId)}?profile=${settings.playbackMode}`);
+    } catch {
+      // best-effort: a reprodução resolve a faixa normalmente se falhar
+    }
   },
 
   async getRelated(track) {

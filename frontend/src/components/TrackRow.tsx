@@ -30,8 +30,8 @@ export function TrackRow({ track, onPress, onMore, onArtistPress, active, traili
             >
               <Text numberOfLines={1} style={[s.sub, s.artistLink]}>{track.artist}</Text>
             </Pressable>
-          ) : <Text numberOfLines={1} style={s.sub}>{track.artist}</Text>}
-          <Text style={s.sub}> · {formatDuration(track.durationSec)}</Text>
+          ) : track.artist ? <Text numberOfLines={1} style={s.sub}>{track.artist}</Text> : null}
+          {track.artist ? <Text style={s.sub}> · {formatDuration(track.durationSec)}</Text> : <Text style={s.sub}>{formatDuration(track.durationSec)}</Text>}
         </View>
       </View>
       {trailing}

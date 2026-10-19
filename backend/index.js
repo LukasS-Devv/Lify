@@ -394,6 +394,24 @@ function createApp({
     });
   });
 
+  // Pré-resolve a faixa seguinte sem transmitir áudio; a reprodução usa o cache.
+  app.get('/prefetch/:videoId', (req, res) => {
+    const { videoId } = req.params;
+    if (!VIDEO_ID_PATTERN.test(videoId)) {
+      res.status(400).json({ error: 'invalid_video_id' });
+      return;
+    }
+    const profile = req.query.profile ?? 'standard';
+    if (typeof profile !== 'string' || !Object.hasOwn(AUDIO_FORMATS, profile)) {
+      res.status(400).json({ error: 'invalid_playback_profile' });
+      return;
+    }
+
+    const { promise, source } = resolveStream(videoId, profile);
+    promise.catch((error) => logger.error?.(`[prefetch] ${videoId} failed`, error.message));
+    res.status(202).json({ status: source });
+  });
+
   return app;
 }
 

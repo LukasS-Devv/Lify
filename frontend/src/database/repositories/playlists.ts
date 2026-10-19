@@ -11,6 +11,7 @@ interface PlaylistRow {
   updated_at: number;
   track_count: number;
   cover_url: string | null;
+  pinned: number;
   track_cover_url: string | null;
 }
 
@@ -20,7 +21,7 @@ export async function listPlaylists(db: Db): Promise<PlaylistSummary[]> {
       (SELECT COUNT(*) FROM playlist_tracks pt WHERE pt.playlist_id = p.id) AS track_count,
       (SELECT t.artwork_url FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
         WHERE pt.playlist_id = p.id ORDER BY pt.position ASC LIMIT 1) AS track_cover_url
-    FROM playlists p ORDER BY p.updated_at DESC`);
+    FROM playlists p ORDER BY p.pinned DESC, p.updated_at DESC`);
   return rows.map(toSummary);
 }
 
@@ -43,7 +44,12 @@ const toSummary = (r: PlaylistRow): PlaylistSummary => ({
   trackCount: r.track_count,
   coverUrl: r.cover_url ?? r.track_cover_url,
   customCoverUrl: r.cover_url,
+  pinned: r.pinned === 1,
 });
+
+export async function setPlaylistPinned(db: Db, id: number, pinned: boolean): Promise<void> {
+  await db.runAsync('UPDATE playlists SET pinned = ? WHERE id = ?', pinned ? 1 : 0, id);
+}
 
 export async function createPlaylist(
   db: Db,
@@ -152,6 +158,19 @@ export async function moveTrackInPlaylist(db: Db, playlistId: number, from: numb
     }
     await db.runAsync('UPDATE playlists SET updated_at = ? WHERE id = ?', Date.now(), playlistId);
   });
+}
+
+/** trackId -> playlist mais recentemente atualizada que contém a faixa. */
+export async function playlistByTrack(db: Db): Promise<Map<string, number>> {
+  const rows = await db.getAllAsync<{ track_id: string; playlist_id: number }>(
+    `SELECT pt.track_id, pt.playlist_id FROM playlist_tracks pt
+     JOIN playlists p ON p.id = pt.playlist_id
+     ORDER BY p.updated_at DESC, pt.position ASC`);
+  const map = new Map<string, number>();
+  for (const row of rows) {
+    if (!map.has(row.track_id)) map.set(row.track_id, row.playlist_id);
+  }
+  return map;
 }
 
 export async function playlistIdsContaining(db: Db, trackId: string): Promise<number[]> {

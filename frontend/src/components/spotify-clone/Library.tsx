@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { EmptyState } from '../EmptyState';
 import { IconButton } from '../IconButton';
 import { ImportPlaylistModal } from '../ImportPlaylistModal';
+import { ActionSheet } from '../ActionSheet';
+import { Icon } from '../Icon';
 import { TrackActionsModal } from '../TrackActionsModal';
 import { ArtworkImage } from '../ArtworkImage';
-import { Cover } from '../Cover';
+import { Cover, MosaicCover } from '../Cover';
 import { TrackRow } from '../TrackRow';
 import { useFavorites, useHistory } from '@/features/library/useLibrary';
 import { usePlaylists } from '@/features/playlists/usePlaylists';
@@ -23,17 +25,44 @@ import { selectCurrentTrack, usePlayerStore } from '@/services/audio/store';
 type LibraryRow =
   | { id: string; type: 'section'; title: string }
   | { id: string; type: 'playlist'; playlist: PlaylistSummary }
+  | { id: string; type: 'system'; kind: 'liked' | 'history'; title: string; count: number; uris: string[] }
   | { id: string; type: 'track'; track: Track; index: number; queue: Track[] };
 
-export function Library() {
+function PlaylistRow({ cover, title, count, pinned, onPress, onLongPress }: {
+  cover: ReactNode; title: string; count: number; pinned?: boolean; onPress: () => void; onLongPress?: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      onLongPress={onLongPress}
+      style={({ pressed }) => [s.playlistRow, pressed && s.pressed]}
+    >
+      {cover}
+      <View style={s.playlistInfo}>
+        <View style={s.playlistTitleRow}>
+          <Text numberOfLines={1} style={s.playlistTitle}>{title}</Text>
+          {pinned ? <Icon name="pin" size={14} color={colors.accent} /> : null}
+        </View>
+        <Text style={s.playlistSubtitle}>{t('common.tracks', { count })}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+export function Library({ openCategory, openNonce }: { openCategory?: LibraryCategory; openNonce?: string }) {
   const router = useRouter();
-  const [category, setCategory] = useState<LibraryCategory | null>(null);
+  const [category, setCategory] = useState<LibraryCategory | null>(openCategory ?? null);
+  useEffect(() => {
+    if (openCategory) setCategory(openCategory);
+  }, [openCategory, openNonce]);
   const favorites = useFavorites();
   const history = useHistory(100);
   const playlists = usePlaylists();
   const current = usePlayerStore(selectCurrentTrack);
   const [menuTrack, setMenuTrack] = useState<Track | null>(null);
   const [importing, setImporting] = useState(false);
+  const [pinTarget, setPinTarget] = useState<PlaylistSummary | null>(null);
   const [artists, setArtists] = useState<CatalogArtist[]>([]);
   const isPlaylist = category === 'playlists';
   const historyTracks = history.data.map(({ track }) => track);
@@ -54,11 +83,9 @@ export function Library() {
     return [...counts.values()].sort((a, b) => b.count - a.count).slice(0, 8);
   }, [history.data]);
 
-  const loading = category === null
+  const loading = category === null || isPlaylist
     ? playlists.loading || favorites.loading || history.loading
-    : isPlaylist
-      ? playlists.loading
-      : category === 'favorites'
+    : category === 'favorites'
         ? favorites.loading
         : history.loading;
   const emptyMessage = category === null
@@ -75,23 +102,29 @@ export function Library() {
       : category === 'favorites'
         ? t('library.tab.liked')
         : t('library.tab.history');
+  const systemRows: LibraryRow[] = [
+    {
+      id: 'system-liked',
+      type: 'system',
+      kind: 'liked',
+      title: t('library.tab.liked'),
+      count: favorites.data.length,
+      uris: favorites.data.slice(0, 4).map((track) => track.artworkUrl),
+    },
+    {
+      id: 'system-history',
+      type: 'system',
+      kind: 'history',
+      title: t('library.tab.history'),
+      count: historyTracks.length,
+      uris: historyTracks.slice(0, 4).map((track) => track.artworkUrl),
+    },
+  ];
+  const playlistRows: LibraryRow[] = playlists.data.map((playlist) => ({ id: `playlist-${playlist.id}`, type: 'playlist' as const, playlist }));
   const rows: LibraryRow[] = category === null
-    ? [
-        ...(playlists.data.length ? [
-          { id: 'section-playlists', type: 'section' as const, title: t('library.tab.playlists') },
-          ...playlists.data.map((playlist) => ({ id: `playlist-${playlist.id}`, type: 'playlist' as const, playlist })),
-        ] : []),
-        ...(favorites.data.length ? [
-          { id: 'section-favorites', type: 'section' as const, title: t('library.tab.liked') },
-          ...favorites.data.map((track) => ({ id: `favorite-${track.id}`, type: 'track' as const, track, index: tracks.findIndex((item) => item.id === track.id), queue: tracks })),
-        ] : []),
-        ...(historyTracks.length ? [
-          { id: 'section-history', type: 'section' as const, title: t('library.tab.history') },
-          ...historyTracks.map((track) => ({ id: `history-${track.id}`, type: 'track' as const, track, index: tracks.findIndex((item) => item.id === track.id), queue: tracks })),
-        ] : []),
-      ]
+    ? [{ id: 'section-playlists', type: 'section', title: t('library.tab.playlists') }, ...systemRows, ...playlistRows]
     : isPlaylist
-      ? playlists.data.map((playlist) => ({ id: `playlist-${playlist.id}`, type: 'playlist' as const, playlist }))
+      ? [...systemRows, ...playlistRows]
       : tracks.map((track, index) => ({ id: `${track.id}-${index}`, type: 'track' as const, track, index, queue: tracks }));
 
   useEffect(() => {
@@ -135,18 +168,22 @@ export function Library() {
             onPress={() => playQueue(item.queue, item.index)}
             onMore={() => setMenuTrack(item.track)}
           />
+        ) : item.type === 'system' ? (
+          <PlaylistRow
+            cover={<MosaicCover uris={item.uris} size={56} radius={radius.sm} seed={`virtual-${item.kind}`} />}
+            title={item.title}
+            count={item.count}
+            onPress={() => router.push({ pathname: '/library/[kind]', params: { kind: item.kind } })}
+          />
         ) : (
-          <Pressable
-            accessibilityRole="button"
+          <PlaylistRow
+            cover={<Cover uri={item.playlist.coverUrl} size={56} />}
+            title={item.playlist.name}
+            count={item.playlist.trackCount}
+            pinned={item.playlist.pinned}
             onPress={() => router.push({ pathname: '/playlist/[id]', params: { id: String(item.playlist.id) } })}
-            style={({ pressed }) => [s.playlistRow, pressed && s.pressed]}
-          >
-            <Cover uri={item.playlist.coverUrl} size={56} />
-            <View style={s.playlistInfo}>
-              <Text numberOfLines={1} style={s.playlistTitle}>{item.playlist.name}</Text>
-              <Text style={s.playlistSubtitle}>{t('common.tracks', { count: item.playlist.trackCount })}</Text>
-            </View>
-          </Pressable>
+            onLongPress={() => setPinTarget(item.playlist)}
+          />
         )}
         ListHeaderComponent={(
           <>
@@ -216,6 +253,16 @@ export function Library() {
         }}
       />
       <TrackActionsModal track={menuTrack} onClose={() => { setMenuTrack(null); void favorites.reload(); }} />
+      <ActionSheet
+        visible={pinTarget !== null}
+        title={pinTarget?.name}
+        items={pinTarget ? [{
+          icon: pinTarget.pinned ? 'pin' : 'pin-outline',
+          label: pinTarget.pinned ? t('playlist.unpin') : t('playlist.pin'),
+          onPress: () => void playlists.setPinned(pinTarget.id, !pinTarget.pinned),
+        }] : []}
+        onClose={() => setPinTarget(null)}
+      />
     </View>
   );
 }
@@ -230,7 +277,8 @@ const s = StyleSheet.create({
   playLabel: { color: colors.accentText, fontSize: font.sm, fontWeight: '800' },
   playlistRow: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   playlistInfo: { flex: 1 },
-  playlistTitle: { color: colors.text, fontSize: font.md, fontWeight: '700' },
+  playlistTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  playlistTitle: { color: colors.text, fontSize: font.md, fontWeight: '700', flexShrink: 1 },
   playlistSubtitle: { color: colors.textMuted, fontSize: font.sm, marginTop: 3 },
   artistsSection: { paddingTop: spacing.md, paddingBottom: spacing.sm },
   artistsTitle: { color: colors.text, fontSize: font.md, fontWeight: '700', paddingHorizontal: spacing.md, marginBottom: spacing.sm },

@@ -24,6 +24,7 @@ export interface PlaylistSummary extends Playlist {
   trackCount: number;
   coverUrl: string | null;
   customCoverUrl: string | null;
+  pinned: boolean;
 }
 
 export interface HistoryEntry {

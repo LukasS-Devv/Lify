@@ -5,19 +5,24 @@ import Slider from '@react-native-community/slider';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useProgress } from 'react-native-track-player';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Button, Cover, EmptyState, Icon, IconButton, SleepTimerModal, TrackActionsModal } from '@/components';
+import { Button, Cover, EmptyState, FavoriteToast, Icon, IconButton, SleepTimerModal, TrackActionsModal } from '@/components';
 import { usePlayer } from '@/features/player/usePlayer';
 import {
   cancelSleepTimer, next, previous, removeFromQueue, seekTo, setRepeat, setSleepTimer, shuffleUpcoming, skipTo, togglePlay,
 } from '@/services/audio/controller';
 import { usePlayerStore } from '@/services/audio/store';
 import { t, useTranslation } from '@/i18n';
-import type { RepeatMode } from '@/types';
+import type { RepeatMode, Track } from '@/types';
 import { gradientFor } from '@/utils/color';
 import { formatDuration } from '@/utils/track';
 import { colors, font, radius, shadow, spacing } from '@/theme/tokens';
 
 const REPEAT_NEXT: Record<RepeatMode, RepeatMode> = { off: 'all', all: 'one', one: 'off' };
+
+type QueueRow =
+  | { kind: 'track'; tr: Track; i: number }
+  | { kind: 'divider' }
+  | { kind: 'note' };
 
 export default function PlayerScreen() {
   useTranslation();
@@ -28,6 +33,7 @@ export default function PlayerScreen() {
   const { position, duration } = useProgress(500);
   const [dragging, setDragging] = useState<number | null>(null);
   const [menu, setMenu] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
   const [sleepTimerVisible, setSleepTimerVisible] = useState(false);
   const [timerNow, setTimerNow] = useState(Date.now());
   const releaseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -56,7 +62,15 @@ export default function PlayerScreen() {
   const total = duration || track.durationSec || 0;
   const shown = dragging ?? position;
   const busy = status === 'loading' || status === 'buffering';
-  const upcoming = queue.items.map((tr, i) => ({ tr, i })).filter(({ i }) => i > queue.index);
+  const repeatingList = repeat === 'all';
+  const rows: QueueRow[] = [];
+  const visibleEnd = repeatingList ? (queue.recStart ?? queue.items.length) : queue.items.length;
+  queue.items.slice(0, visibleEnd).forEach((tr, i) => {
+    if (i > 0 && i === queue.recStart) rows.push({ kind: 'divider' });
+    rows.push({ kind: 'track', tr, i });
+  });
+  if (repeatingList) rows.push({ kind: 'note' });
+  const trackCount = rows.filter((r) => r.kind === 'track').length;
   const [top] = gradientFor(track.id, colors.bg);
   const cover = Math.min(width - spacing.lg * 2, 360);
   const timerRemaining = sleepTimerEndsAt
@@ -85,17 +99,19 @@ export default function PlayerScreen() {
       <View style={s.titleRow}>
         <View style={{ flex: 1 }}>
           <Text numberOfLines={2} style={s.title}>{track.title}</Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t('artist.openProfile', { name: track.artist })}
-            onPress={() => router.push({
-              pathname: '/artist/[id]',
-              params: { id: 'search', name: track.artist.split(',')[0].trim() },
-            })}
-            hitSlop={6}
-          >
-            <Text numberOfLines={1} style={s.artist}>{track.artist}</Text>
-          </Pressable>
+          {track.artist ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('artist.openProfile', { name: track.artist })}
+              onPress={() => router.push({
+                pathname: '/artist/[id]',
+                params: { id: 'search', name: track.artist.split(',')[0].trim() },
+              })}
+              hitSlop={6}
+            >
+              <Text numberOfLines={1} style={s.artist}>{track.artist}</Text>
+            </Pressable>
+          ) : null}
         </View>
         <IconButton icon={favorite ? 'heart' : 'heart-outline'} size={28} color={favorite ? colors.accent : colors.text}
           label={favorite ? t('player.unlike') : t('player.like')} onPress={toggleFavorite} />
@@ -141,7 +157,17 @@ export default function PlayerScreen() {
         </View>
       </View>
 
-      <Text style={s.section}>{t('player.nextUp')} · {upcoming.length}</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: queueOpen }}
+        accessibilityLabel={queueOpen ? t('player.hideQueue') : t('player.showQueue')}
+        onPress={() => setQueueOpen((open) => !open)}
+        style={s.sectionRow}
+        hitSlop={6}
+      >
+        <Text style={s.section}>{t('player.nextUp')} · {trackCount}</Text>
+        <Icon name={queueOpen ? 'chevron-up' : 'chevron-down'} size={20} color={colors.text} />
+      </Pressable>
     </View>
   );
 
@@ -149,23 +175,37 @@ export default function PlayerScreen() {
     <LinearGradient colors={[top, colors.bg]} locations={[0, 0.7]} style={s.root}>
       <SafeAreaView style={{ flex: 1 }}>
         <FlatList
-          data={upcoming}
-          keyExtractor={({ tr, i }) => `${tr.id}-${i}`}
+          data={queueOpen ? rows : []}
+          keyExtractor={(row, index) => (row.kind === 'track' ? `${row.tr.id}-${row.i}` : `${row.kind}-${index}`)}
           ListHeaderComponent={header}
           contentContainerStyle={{ paddingBottom: spacing.xl }}
-          renderItem={({ item: { tr, i } }) => (
-            <View style={s.qrow}>
-              <Pressable style={s.qmain} onPress={() => void skipTo(i)}>
-                <Cover uri={tr.artworkUrl} size={44} />
-                <View style={{ flex: 1 }}>
-                  <Text numberOfLines={1} style={s.qtitle}>{tr.title}</Text>
-                  <Text numberOfLines={1} style={s.qsub}>{tr.artist}</Text>
+          renderItem={({ item }) => {
+            if (item.kind === 'divider') {
+              return (
+                <View style={s.divider}>
+                  <View style={s.dividerLine} />
+                  <Text style={s.dividerText}>{t('player.recommended')}</Text>
+                  <View style={s.dividerLine} />
                 </View>
-              </Pressable>
-              <IconButton icon="close" size={20} color={colors.textMuted} label={t('player.remove')} onPress={() => void removeFromQueue(i)} />
-            </View>
-          )}
-          ListEmptyComponent={<Text style={[s.qsub, { paddingHorizontal: spacing.md }]}>{t('player.queueEmpty')}</Text>}
+              );
+            }
+            if (item.kind === 'note') return <Text style={s.note}>{t('player.repeatListNote')}</Text>;
+            const { tr, i } = item;
+            const current = i === queue.index;
+            return (
+              <View style={[s.qrow, i < queue.index && s.qPast]}>
+                <Pressable style={s.qmain} onPress={() => void skipTo(i)}>
+                  <Cover uri={tr.artworkUrl} size={44} />
+                  <View style={{ flex: 1 }}>
+                    <Text numberOfLines={1} style={[s.qtitle, current && { color: colors.accent }]}>{tr.title}</Text>
+                    <Text numberOfLines={1} style={s.qsub}>{tr.artist}</Text>
+                  </View>
+                </Pressable>
+                <IconButton icon="close" size={20} color={colors.textMuted} label={t('player.remove')} onPress={() => void removeFromQueue(i)} />
+              </View>
+            );
+          }}
+          ListEmptyComponent={queueOpen ? <Text style={[s.qsub, { paddingHorizontal: spacing.md }]}>{t('player.queueEmpty')}</Text> : null}
         />
       </SafeAreaView>
       <TrackActionsModal
@@ -173,6 +213,7 @@ export default function PlayerScreen() {
         onClose={() => setMenu(false)}
         onSleepTimer={() => { setMenu(false); setSleepTimerVisible(true); }}
       />
+      <FavoriteToast />
       <SleepTimerModal
         visible={sleepTimerVisible}
         endsAt={sleepTimerEndsAt}
@@ -201,9 +242,15 @@ const s = StyleSheet.create({
   controls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', paddingHorizontal: spacing.md, marginTop: spacing.md },
   playBtn: { width: 76, height: 76, borderRadius: 38, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   repeatOne: { position: 'absolute', top: 10, left: 0, right: 0, textAlign: 'center', color: colors.accent, fontSize: 9, fontWeight: '900' },
-  section: { color: colors.text, fontSize: font.lg, fontWeight: '800', paddingHorizontal: spacing.lg, marginTop: spacing.xl, marginBottom: spacing.sm },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: spacing.lg, marginTop: spacing.xl, marginBottom: spacing.sm },
+  section: { color: colors.text, fontSize: font.lg, fontWeight: '800', paddingHorizontal: spacing.lg },
   qrow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
   qmain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   qtitle: { color: colors.text, fontSize: font.md, fontWeight: '600' },
   qsub: { color: colors.textMuted, fontSize: font.sm },
+  qPast: { opacity: 0.5 },
+  divider: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.lg, marginVertical: spacing.md },
+  dividerLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.textMuted },
+  dividerText: { color: colors.textMuted, fontSize: font.sm, fontWeight: '700' },
+  note: { color: colors.textMuted, fontSize: font.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, textAlign: 'center' },
 });

@@ -51,6 +51,8 @@ export interface CatalogProvider {
   getCollection(id: string, kind: 'album' | 'playlist'): Promise<CatalogCollection>;
   suggestions(query: string): Promise<string[]>;
   getStream(track: Track): Promise<StreamInfo>;
+  /** Pré-resolve o stream em segundo plano; falhas são ignoradas. */
+  prefetch(track: Track): Promise<void>;
   /** Faixas relacionadas/“próximas” para preencher a fila automática. */
   getRelated(track: Track): Promise<Track[]>;
 }

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, StyleSheet, View } from 'react-native';
+import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { getDb, settingsRepo } from '@/database';
-import { setupAudio } from '@/services/audio/controller';
-import { Button, EmptyState, GlobalBottomBar, MiniPlayer, Screen, ServerNotice } from '@/components';
+import { getDb, resetDatabase, settingsRepo } from '@/database';
+import { restoreNativeQueue } from '@/services/audio/controller';
+import { Button, EmptyState, FavoriteToast, GlobalBottomBar, MiniPlayer, Screen, ServerNotice } from '@/components';
 import { setLanguage, t, useTranslation } from '@/i18n';
 import { colors } from '@/theme/tokens';
 import { useStartupStore } from '@/services/startup';
@@ -23,7 +23,7 @@ export default function RootLayout() {
   const [attempt, setAttempt] = useState(0);
   const [splashVisible, setSplashVisible] = useState(true);
   const [splashReleased, setSplashReleased] = useState(false);
-  const hasLoadedHome = useStartupStore((state) => state.hasLoadedHome);
+  const [resetting, setResetting] = useState(false);
   const pathname = usePathname();
 
   useEffect(() => {
@@ -39,7 +39,7 @@ export default function RootLayout() {
         if (alive) {
           setError(null);
           setReady(true);
-          void setupAudio().catch((audioError: unknown) => {
+          void restoreNativeQueue().catch((audioError: unknown) => {
             console.warn('[startup] Audio setup failed; it will be retried when playback starts', audioError);
           });
         }
@@ -60,18 +60,40 @@ export default function RootLayout() {
         });
       return;
     }
-    if (!ready || !hasLoadedHome || splashReleased) return;
+    if (!ready || splashReleased) return;
     void SplashScreen.hideAsync()
       .then(() => setSplashReleased(true))
       .catch((hideError: unknown) => {
         console.warn('[startup] Could not hide the native splash', hideError);
         setSplashReleased(true);
       });
-  }, [error, hasLoadedHome, ready, splashReleased]);
+  }, [error, ready, splashReleased]);
 
   const isMainTab = ['/', '/search', '/library'].includes(pathname);
   const showGlobalBar = !isMainTab && pathname !== '/player' && pathname !== '/settings';
   const showGlobalMiniPlayer = showGlobalBar;
+
+  const retry = () => {
+    setSplashVisible(true);
+    setSplashReleased(false);
+    setAttempt((n) => n + 1);
+  };
+
+  // Última saída quando o banco está corrompido: sem isso o app fica preso no
+  // erro de inicialização e o usuário precisa desinstalar para voltar a abrir.
+  const resetLocalData = () => {
+    setResetting(true);
+    void resetDatabase()
+      .then(() => {
+        setResetting(false);
+        retry();
+      })
+      .catch((resetError: unknown) => {
+        console.error('[startup] Could not reset the local database', resetError);
+        setResetting(false);
+        setError(resetError instanceof Error ? resetError.message : t('app.startFailedGeneric'));
+      });
+  };
 
   return (
     <SafeAreaProvider>
@@ -79,12 +101,17 @@ export default function RootLayout() {
       <View style={{ flex: 1, backgroundColor: colors.bg }}>
         {error ? (
           <Screen>
-            <EmptyState message={t('app.startFailed', { error })} />
-            <Button label={t('common.retry')} onPress={() => {
-              setSplashVisible(true);
-              setSplashReleased(false);
-              setAttempt((n) => n + 1);
-            }} />
+            <View style={styles.errorBox}>
+              <EmptyState message={t('app.startFailed', { error })} />
+              <Button label={t('common.retry')} onPress={retry} />
+              <Button
+                label={t('app.resetData')}
+                variant="danger"
+                onPress={resetLocalData}
+                loading={resetting}
+              />
+              <Text style={styles.resetHint}>{t('app.resetDataHint')}</Text>
+            </View>
           </Screen>
         ) : ready ? (
           <>
@@ -94,6 +121,7 @@ export default function RootLayout() {
               <Stack.Screen name="playlist/[id]" options={{ headerShown: false }} />
               <Stack.Screen name="artist/[id]" options={{ headerShown: false }} />
               <Stack.Screen name="collection/[id]" options={{ headerShown: false }} />
+              <Stack.Screen name="library/[kind]" options={{ headerShown: false }} />
               <Stack.Screen name="playlists" options={{ headerShown: false }} />
               <Stack.Screen name="recent" options={{ headerShown: false }} />
               <Stack.Screen name="settings" options={{ title: t('settings.title'), headerShadowVisible: false }} />
@@ -101,6 +129,7 @@ export default function RootLayout() {
             {showGlobalMiniPlayer ? <MiniPlayer /> : null}
             {showGlobalBar ? <ServerNotice /> : null}
             {showGlobalBar ? <GlobalBottomBar /> : null}
+            {pathname !== '/player' ? <FavoriteToast lifted={showGlobalBar} /> : null}
           </>
         ) : null}
         {splashVisible && !error ? (
@@ -159,4 +188,20 @@ const splashStyles = StyleSheet.create({
     justifyContent: 'center',
   },
   artwork: { width: 300, height: 300 },
+});
+
+const styles = StyleSheet.create({
+  errorBox: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    paddingHorizontal: 24,
+  },
+  resetHint: {
+    color: colors.textMuted,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 4,
+  },
 });
