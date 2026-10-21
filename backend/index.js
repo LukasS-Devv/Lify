@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const express = require('express');
 const ytdlp = require('youtube-dl-exec');
+const { Innertube, Constants } = require('youtubei.js');
 
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 const MAX_LOG_LENGTH = 4000;
@@ -23,14 +24,23 @@ const FORWARDED_RESPONSE_HEADERS = [
   'etag',
   'last-modified',
 ];
+const DEFAULT_UPSTREAM_CHUNK_BYTES = 262_144;
+
+// UPSTREAM_CHUNK_BYTES: tamanho máximo de cada bloco pedido ao googlevideo. Valores inválidos usam o padrão.
+function parseChunkBytes(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_UPSTREAM_CHUNK_BYTES;
+}
+
 const DEFAULT_OPTIONS = {
   extractorTimeoutMs: 45_000,
   upstreamTimeoutMs: 30_000,
   upstreamInactivityTimeoutMs: 30_000,
   maxConcurrentResolvers: 4,
-  maxCacheEntries: 200,
-  maxCacheAgeMs: 5 * 60_000,
+  maxCacheEntries: 500,
+  maxCacheAgeMs: 45 * 60_000,
   cacheExpirySafetyMs: 30_000,
+  upstreamChunkBytes: parseChunkBytes(process.env.UPSTREAM_CHUNK_BYTES),
 };
 
 // Cookies do YouTube (formato Netscape) fornecidos via variável de ambiente.
@@ -69,11 +79,104 @@ function getUrlExpiry(streamUrl) {
   return value > 1_000_000_000_000 ? value : value * 1000;
 }
 
+// Interpreta o Range do app: 'bytes=N-M' ou 'bytes=N-'. Outros formatos são tratados como ausentes.
+function parseClientRange(header) {
+  const match = typeof header === 'string' ? /^bytes=(\d+)-(\d*)$/.exec(header.trim()) : null;
+  if (!match) return { requested: false, start: 0, end: null };
+  const start = Number(match[1]);
+  const end = match[2] === '' ? null : Number(match[2]);
+  if (end !== null && end < start) return { requested: false, start: 0, end: null };
+  return { requested: true, start, end };
+}
+
+// Innertube (youtubei.js): resolvedor principal, sem cookies.
+const INNERTUBE_CLIENTS = ['ANDROID_VR', 'IOS', 'TV'];
+const INNERTUBE_TIMEOUT_MS = 8_000;
+const INNERTUBE_SESSION_MAX_AGE_MS = 6 * 60 * 60_000;
+const INNERTUBE_MAX_CONSECUTIVE_FAILURES = 3;
+
+let innertubeSession = null; // { promise, createdAt }
+let innertubeFailures = 0;
+
+// Sessão única e preguiçosa. É aquecida apenas no arranque direto (require.main).
+function getInnertubeSession() {
+  const expired = innertubeSession && Date.now() - innertubeSession.createdAt >= INNERTUBE_SESSION_MAX_AGE_MS;
+  if (!innertubeSession || expired || innertubeFailures >= INNERTUBE_MAX_CONSECUTIVE_FAILURES) {
+    const session = { createdAt: Date.now(), promise: Innertube.create() };
+    // Uma criação falhada não fica em cache: a próxima chamada tenta de novo.
+    session.promise.catch(() => {
+      if (innertubeSession === session) innertubeSession = null;
+    });
+    innertubeSession = session;
+    innertubeFailures = 0;
+  }
+  return innertubeSession.promise;
+}
+
+// standard: maior ≤128 kbps, senão ≤160, senão o melhor.
+// dataSaver: maior ≤64 kbps, senão ≤96, senão o pior.
+function chooseAudioFormat(formats, profile) {
+  const candidates = formats
+    .filter((format) => format.has_audio && !format.has_video && typeof format.bitrate === 'number')
+    .map((format) => ({ format, kbps: format.bitrate / 1000 }))
+    .sort((a, b) => b.kbps - a.kbps);
+  const largestUnder = (limit) => candidates.find((candidate) => candidate.kbps <= limit);
+  const pick = profile === 'dataSaver'
+    ? largestUnder(64) ?? largestUnder(96) ?? candidates[candidates.length - 1]
+    : largestUnder(128) ?? largestUnder(160) ?? candidates[0];
+  return pick?.format ?? null;
+}
+
+async function resolveInnertubeClients(videoId, profile, startedAt) {
+  const yt = await getInnertubeSession();
+  const errors = [];
+  for (const client of INNERTUBE_CLIENTS) {
+    try {
+      const info = await yt.getBasicInfo(videoId, { client });
+      const format = chooseAudioFormat(info.streaming_data?.adaptive_formats ?? [], profile);
+      if (!format) throw new Error('no audio-only format');
+      const streamUrl = new URL(await format.decipher(yt.session.player));
+      if (streamUrl.protocol !== 'https:' || !streamUrl.hostname.endsWith('.googlevideo.com')) {
+        throw new Error('unsupported stream URL');
+      }
+      return {
+        url: streamUrl.toString(),
+        httpHeaders: { 'User-Agent': Constants.CLIENTS[client].USER_AGENT },
+        resolveMs: Date.now() - startedAt,
+        resolver: 'innertube',
+      };
+    } catch (error) {
+      errors.push(`${client}: ${error.message}`);
+    }
+  }
+  throw new Error(`Innertube failed (${errors.join('; ')})`);
+}
+
+async function resolveWithInnertube(videoId, profile) {
+  const startedAt = Date.now();
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Innertube resolution timed out')), INNERTUBE_TIMEOUT_MS);
+  });
+  try {
+    const result = await Promise.race([resolveInnertubeClients(videoId, profile, startedAt), timeout]);
+    innertubeFailures = 0;
+    return result;
+  } catch (error) {
+    innertubeFailures += 1;
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function createApp({
   spawnProcess = spawn,
   requestUpstream = https.request,
   downloaderPath = process.env.YT_DLP_PATH || ytdlp.constants.YOUTUBE_DL_PATH,
   logger = console,
+  // Innertube primeiro; YT_RESOLVER=ytdlp desliga-o e usa apenas yt-dlp.
+  innertubeResolver = process.env.YT_RESOLVER === 'ytdlp' ? null : resolveWithInnertube,
   cookiesPath = prepareCookiesFile(process.env, logger),
   // Opcionais (desligados por defeito, mantêm o comportamento original):
   // YT_PLAYER_CLIENTS=tv,mweb  e  YT_JS_RUNTIME=node
@@ -84,6 +187,8 @@ function createApp({
   const options = { ...DEFAULT_OPTIONS, ...providedOptions };
   const cache = new Map();
   const pendingResolutions = new Map();
+  // Ligação keep-alive partilhada pelos blocos ao googlevideo.
+  const upstreamAgent = new https.Agent({ keepAlive: true });
   let activeResolvers = 0;
   const app = express();
   app.disable('x-powered-by');
@@ -113,7 +218,18 @@ function createApp({
     }
   }
 
-  function extractStream(videoId, profile) {
+  async function extractStream(videoId, profile) {
+    if (innertubeResolver) {
+      try {
+        return await innertubeResolver(videoId, profile);
+      } catch (error) {
+        logger.warn?.(`[stream] ${videoId} Innertube failed, falling back to yt-dlp`, error.message);
+      }
+    }
+    return extractWithYtdlp(videoId, profile);
+  }
+
+  function extractWithYtdlp(videoId, profile) {
     return new Promise((resolve, reject) => {
       const sourceUrl = `https://music.youtube.com/watch?v=${videoId}`;
       let extractor;
@@ -203,6 +319,7 @@ function createApp({
           url: streamUrl.toString(),
           httpHeaders,
           resolveMs: Date.now() - startedAt,
+          resolver: 'ytdlp',
         });
       });
     });
@@ -237,6 +354,15 @@ function createApp({
     return { promise, source: 'miss' };
   }
 
+  // Apaga a entrada do cache e resolve de novo só pelo yt-dlp.
+  function refreshWithYtdlp(key, videoId, profile) {
+    cache.delete(key);
+    return extractWithYtdlp(videoId, profile).then((result) => {
+      cacheResolution(key, result);
+      return result;
+    });
+  }
+
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
   });
@@ -259,11 +385,13 @@ function createApp({
     let upstreamResponse;
     let upstreamTimer;
     let resolutionSource = 'miss';
+    let resolver = null;
     let resolveMs = 0;
     let resolutionCompletedAt = requestStartedAt;
     let upstreamMs = null;
     let firstByteMs = null;
     let responseStatus = 502;
+    let chunksRequested = 0;
     let logged = false;
 
     const logRequest = (event) => {
@@ -274,9 +402,12 @@ function createApp({
         videoId,
         profile,
         resolutionSource,
+        resolver,
         resolveMs,
         upstreamMs,
         firstByteMs,
+        chunks: chunksRequested,
+        chunkBytes: resolver === 'innertube' ? options.upstreamChunkBytes : null,
         totalMs: Date.now() - requestStartedAt,
         status: responseStatus,
       })}`);
@@ -304,12 +435,186 @@ function createApp({
     resolutionSource = resolved.source;
     if (resolutionSource === 'limited') res.setHeader('Retry-After', '2');
 
-    resolved.promise.then((stream) => {
+    const cacheKey = `${profile}:${videoId}`;
+    let retriedWithYtdlp = false;
+
+    // Proxy em blocos para o resolvedor Innertube: cada bloco é um pedido 'bytes=a-b' com no máximo
+    // options.upstreamChunkBytes, escrito na mesma resposta ao app.
+    const startChunked = (stream) => {
+      const chunkBytes = options.upstreamChunkBytes;
+      const range = parseClientRange(req.headers.range);
+      const upstreamUrl = new URL(stream.url);
+      const baseHeaders = { ...stream.httpHeaders };
+      if (typeof req.headers['if-range'] === 'string') baseHeaders['If-Range'] = req.headers['if-range'];
+      let total = null;
+      let last = range.end; // último byte absoluto pedido (inclusivo); null = até ao fim
+      let headersSent = false;
+
+      const openBlock = (targetUrl, headers, redirectsLeft, onResponse) => {
+        clearTimeout(upstreamTimer);
+        upstreamTimer = setTimeout(() => {
+          upstreamRequest?.destroy(new StreamError('Upstream response timed out', 504));
+        }, options.upstreamTimeoutMs);
+        upstreamRequest = requestUpstream(targetUrl, { headers, agent: upstreamAgent }, (response) => {
+          const status = response.statusCode || 502;
+          const location = response.headers.location;
+          if ([301, 302, 303, 307, 308].includes(status) && location && !cancelled && !res.destroyed) {
+            response.resume();
+            let next;
+            try {
+              next = new URL(location, targetUrl);
+            } catch {
+              fail(new Error('Invalid upstream redirect'), 'upstream');
+              return;
+            }
+            if (redirectsLeft <= 0 || next.protocol !== 'https:' || !next.hostname.endsWith('.googlevideo.com')) {
+              fail(new Error('Unsupported upstream redirect'), 'upstream');
+              return;
+            }
+            openBlock(next, headers, redirectsLeft - 1, onResponse);
+            return;
+          }
+          clearTimeout(upstreamTimer);
+          onResponse(response);
+        });
+        const current = upstreamRequest;
+        current.once('error', (error) => fail(error, 'upstream'));
+        current.setTimeout?.(options.upstreamTimeoutMs, () => {
+          current.destroy(new StreamError('Upstream connection timed out', 504));
+        });
+        current.end();
+      };
+
+      const observeBlock = (response) => {
+        response.on('data', () => {
+          if (firstByteMs === null) firstByteMs = Date.now() - requestStartedAt;
+        });
+        response.setTimeout?.(options.upstreamInactivityTimeoutMs, () => {
+          response.destroy(new StreamError('Upstream audio stalled', 504));
+        });
+        response.once('error', (error) => fail(error, 'upstream'));
+      };
+
+      const requestBlock = (from) => {
+        let to = from + chunkBytes - 1;
+        if (last !== null) to = Math.min(to, last);
+        chunksRequested += 1;
+        openBlock(upstreamUrl, { ...baseHeaders, Range: `bytes=${from}-${to}` }, 3, (response) => onBlock(response, from));
+      };
+
+      const onBlock = (response, from) => {
+        upstreamResponse = response;
+        if (cancelled || res.destroyed) {
+          response.destroy();
+          return;
+        }
+        const status = response.statusCode || 502;
+
+        if (status === 403 || status === 410) {
+          response.resume();
+          if (!headersSent && !retriedWithYtdlp) {
+            retryWithYtdlp(status);
+            return;
+          }
+          cache.delete(cacheKey);
+          fail(new Error(`Upstream returned ${status} at byte ${from}`), 'upstream');
+          return;
+        }
+
+        if (status === 200 && from === 0 && !headersSent) {
+          // O upstream ignorou Range: o corpo é o ficheiro completo, enviado como 200.
+          upstreamMs = Date.now() - resolutionCompletedAt;
+          for (const name of FORWARDED_RESPONSE_HEADERS) {
+            const value = response.headers[name];
+            if (value !== undefined) res.setHeader(name, value);
+          }
+          res.setHeader('Cache-Control', 'no-store, no-transform');
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          responseStatus = 200;
+          res.status(200);
+          headersSent = true;
+          observeBlock(response);
+          response.pipe(res);
+          return;
+        }
+
+        const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers['content-range'] ?? '');
+        if (status !== 206 || !match || Number(match[1]) !== from || Number(match[2]) < from || Number(match[2]) >= Number(match[3])) {
+          response.resume();
+          fail(new Error(`Unexpected upstream block response (${status})`), 'upstream');
+          return;
+        }
+        const blockEnd = Number(match[2]);
+        const blockTotal = Number(match[3]);
+        if (total === null) {
+          total = blockTotal;
+          last = range.end === null ? total - 1 : Math.min(range.end, total - 1);
+          if (range.start > last) {
+            response.resume();
+            fail(new Error('Requested range is outside the audio'), 'upstream');
+            return;
+          }
+          for (const name of FORWARDED_RESPONSE_HEADERS) {
+            if (name === 'content-range' || name === 'content-length') continue;
+            const value = response.headers[name];
+            if (value !== undefined) res.setHeader(name, value);
+          }
+          res.setHeader('Cache-Control', 'no-store, no-transform');
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          if (range.requested) {
+            res.setHeader('Content-Range', `bytes ${range.start}-${last}/${total}`);
+            res.setHeader('Content-Length', String(last - range.start + 1));
+          } else {
+            res.setHeader('Content-Length', String(total));
+          }
+          responseStatus = range.requested ? 206 : 200;
+          res.status(responseStatus);
+          headersSent = true;
+          upstreamMs = Date.now() - resolutionCompletedAt;
+        } else if (blockTotal !== total) {
+          response.resume();
+          fail(new Error('Upstream audio size changed between blocks'), 'upstream');
+          return;
+        }
+
+        const expected = blockEnd - from + 1;
+        let received = 0;
+        response.on('data', (chunk) => {
+          received += chunk.length;
+        });
+        observeBlock(response);
+        response.once('end', () => {
+          if (received !== expected) {
+            fail(new Error(`Upstream block ended early (${received}/${expected} bytes)`), 'upstream');
+            return;
+          }
+          if (cancelled || res.destroyed) return;
+          const next = blockEnd + 1;
+          if (next > last) {
+            res.end();
+            return;
+          }
+          requestBlock(next);
+        });
+        response.pipe(res, { end: false });
+      };
+
+      requestBlock(range.start);
+    };
+
+    const startStream = (stream) => {
       if (cancelled || res.destroyed) return;
+      resolver = stream.resolver;
       resolveMs = stream.resolveMs;
       resolutionCompletedAt = Date.now();
+      if (resolver === 'innertube') {
+        startChunked(stream);
+        return;
+      }
+      const clientRange = typeof req.headers.range === 'string';
       const upstreamHeaders = { ...stream.httpHeaders };
-      if (typeof req.headers.range === 'string') upstreamHeaders.Range = req.headers.range;
+      // Sem Range do cliente, o googlevideo recusa URLs do Innertube (403): pede-se 'bytes=0-' ao upstream.
+      upstreamHeaders.Range = clientRange ? req.headers.range : 'bytes=0-';
       if (typeof req.headers['if-range'] === 'string') upstreamHeaders['If-Range'] = req.headers['if-range'];
 
       try {
@@ -340,6 +645,18 @@ function createApp({
               openUpstream(next, redirectsLeft - 1);
               return;
             }
+            if ((status === 403 || status === 410) && !cancelled && !res.destroyed) {
+              if (retriedWithYtdlp) {
+                response.resume();
+                fail(new Error(`Upstream returned ${status} after yt-dlp retry`), 'upstream');
+                return;
+              }
+              if (resolver === 'innertube') {
+                response.resume();
+                retryWithYtdlp(status);
+                return;
+              }
+            }
             clearTimeout(upstreamTimer);
             upstreamResponse = response;
             upstreamMs = Date.now() - resolutionCompletedAt;
@@ -347,13 +664,16 @@ function createApp({
               response.destroy();
               return;
             }
+            // Cliente sem Range: o 206 de 'bytes=0-' é entregue como 200 completo, sem content-range.
+            const stripRange = !clientRange && status === 206;
             for (const name of FORWARDED_RESPONSE_HEADERS) {
+              if (stripRange && name === 'content-range') continue;
               const value = response.headers[name];
               if (value !== undefined) res.setHeader(name, value);
             }
             res.setHeader('Cache-Control', 'no-store, no-transform');
             res.setHeader('X-Content-Type-Options', 'nosniff');
-            responseStatus = status;
+            responseStatus = stripRange ? 200 : status;
             res.status(responseStatus);
             response.once('data', () => {
               if (firstByteMs === null) firstByteMs = Date.now() - requestStartedAt;
@@ -375,7 +695,19 @@ function createApp({
       } catch (error) {
         fail(error, 'upstream');
       }
-    }).catch((error) => fail(error, 'yt-dlp'));
+    };
+
+    // 403/410 numa URL do Innertube, antes de enviar bytes ao cliente: resolve de novo via yt-dlp, uma única vez.
+    const retryWithYtdlp = (status) => {
+      retriedWithYtdlp = true;
+      clearTimeout(upstreamTimer);
+      logger.warn?.(`[stream] ${videoId} upstream ${status} on Innertube URL, retrying with yt-dlp`);
+      refreshWithYtdlp(cacheKey, videoId, profile)
+        .then(startStream)
+        .catch((error) => fail(error, 'resolver'));
+    };
+
+    resolved.promise.then(startStream).catch((error) => fail(error, 'resolver'));
 
     res.once('finish', () => logRequest('complete'));
     req.once('aborted', () => {
@@ -420,6 +752,12 @@ module.exports = { app, createApp };
 
 if (require.main === module) {
   const port = Number(process.env.PORT) || 4000;
+  if (process.env.YT_RESOLVER !== 'ytdlp') {
+    getInnertubeSession().then(
+      () => console.log('[stream] Innertube session ready'),
+      (error) => console.error('[stream] Innertube warm-up failed', error.message),
+    );
+  }
   app.listen(port, '0.0.0.0', () => {
     console.log(`[stream] The server is online on port ${port}`);
   });

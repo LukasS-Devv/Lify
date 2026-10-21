@@ -61,7 +61,7 @@ test('a yt-dlp failure returns 502 without taking down the server', async (t) =>
     });
     return process;
   };
-  const server = createApp({ spawnProcess, downloaderPath: 'yt-dlp-test' }).listen(0, '127.0.0.1');
+  const server = createApp({ spawnProcess, downloaderPath: 'yt-dlp-test', innertubeResolver: null }).listen(0, '127.0.0.1');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   await new Promise((resolve) => server.once('listening', resolve));
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -117,7 +117,7 @@ test('stream endpoint forwards byte-range requests to the seekable audio source'
     request.destroy = () => {};
     return request;
   };
-  const server = createApp({ spawnProcess: testSpawn, requestUpstream, downloaderPath: 'yt-dlp-test' }).listen(0, '127.0.0.1');
+  const server = createApp({ spawnProcess: testSpawn, requestUpstream, downloaderPath: 'yt-dlp-test', innertubeResolver: null }).listen(0, '127.0.0.1');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   await new Promise((resolve) => server.once('listening', resolve));
 
@@ -165,7 +165,7 @@ test('data saver profile selects a lower-bitrate format', async (t) => {
     request.destroy = () => {};
     return request;
   };
-  const server = createApp({ spawnProcess, requestUpstream, downloaderPath: 'yt-dlp-test' }).listen(0, '127.0.0.1');
+  const server = createApp({ spawnProcess, requestUpstream, downloaderPath: 'yt-dlp-test', innertubeResolver: null }).listen(0, '127.0.0.1');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   await new Promise((resolve) => server.once('listening', resolve));
 
@@ -205,7 +205,7 @@ test('stream resolution is shared concurrently and cached until the source URL e
     request.destroy = () => {};
     return request;
   };
-  const server = createApp({ spawnProcess, requestUpstream, downloaderPath: 'yt-dlp-test' }).listen(0, '127.0.0.1');
+  const server = createApp({ spawnProcess, requestUpstream, downloaderPath: 'yt-dlp-test', innertubeResolver: null }).listen(0, '127.0.0.1');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   await new Promise((resolve) => server.once('listening', resolve));
   const url = `http://127.0.0.1:${server.address().port}/stream/abcdefghijk`;
@@ -249,7 +249,7 @@ test('prefetch endpoint warms the resolution cache used by the stream endpoint',
     request.destroy = () => {};
     return request;
   };
-  const server = createApp({ spawnProcess, requestUpstream, downloaderPath: 'yt-dlp-test' }).listen(0, '127.0.0.1');
+  const server = createApp({ spawnProcess, requestUpstream, downloaderPath: 'yt-dlp-test', innertubeResolver: null }).listen(0, '127.0.0.1');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   await new Promise((resolve) => server.once('listening', resolve));
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -283,6 +283,7 @@ test('stream endpoint returns 503 when the resolver capacity is exhausted', asyn
   const server = createApp({
     spawnProcess,
     downloaderPath: 'yt-dlp-test',
+    innertubeResolver: null,
     maxConcurrentResolvers: 1,
     extractorTimeoutMs: 5000,
   }).listen(0, '127.0.0.1');
@@ -324,6 +325,7 @@ test('stream endpoint times out yt-dlp resolution', async (t) => {
   const server = createApp({
     spawnProcess,
     downloaderPath: 'yt-dlp-test',
+    innertubeResolver: null,
     extractorTimeoutMs: 20,
   }).listen(0, '127.0.0.1');
   t.after(() => new Promise((resolve) => server.close(resolve)));
@@ -372,7 +374,7 @@ test('stream endpoint follows googlevideo redirects instead of forwarding them',
     request.destroy = () => {};
     return request;
   };
-  const server = createApp({ spawnProcess, requestUpstream, downloaderPath: 'yt-dlp-test' }).listen(0, '127.0.0.1');
+  const server = createApp({ spawnProcess, requestUpstream, downloaderPath: 'yt-dlp-test', innertubeResolver: null }).listen(0, '127.0.0.1');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   await new Promise((resolve) => server.once('listening', resolve));
 
@@ -380,4 +382,367 @@ test('stream endpoint follows googlevideo redirects instead of forwarding them',
   assert.equal(response.status, 200);
   assert.equal(await response.text(), 'audio-data');
   assert.deepEqual(requested, [first, second]);
+});
+
+test('without a client Range the upstream gets bytes=0- and the client receives a plain 200', async (t) => {
+  const expectedUrl = 'https://r1---sn.googlevideo.com/videoplayback?signature=range0';
+  const upstreamCalls = [];
+  const requestUpstream = (url, options, onResponse) => {
+    upstreamCalls.push({ url: url.toString(), headers: options.headers });
+    const request = new EventEmitter();
+    request.end = () => setImmediate(() => {
+      const response = new PassThrough();
+      response.statusCode = 206;
+      response.headers = {
+        'accept-ranges': 'bytes',
+        'content-range': 'bytes 0-9/100',
+        'content-length': '10',
+        'content-type': 'audio/mp4',
+      };
+      onResponse(response);
+      response.end('audio-data');
+    });
+    request.destroy = () => {};
+    return request;
+  };
+  const baseUrl = await startAppServer(t, {
+    innertubeResolver: null,
+    spawnProcess: createSpawnProcess({ stdout: JSON.stringify({ url: expectedUrl, http_headers: {} }) }),
+    requestUpstream,
+    downloaderPath: 'yt-dlp-test',
+  });
+
+  const response = await fetch(`${baseUrl}/stream/abcdefghijk`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-range'), null);
+  assert.equal(response.headers.get('content-length'), '10');
+  assert.equal(response.headers.get('accept-ranges'), 'bytes');
+  assert.equal(await response.text(), 'audio-data');
+  assert.equal(upstreamCalls.length, 1);
+  assert.equal(upstreamCalls[0].headers.Range, 'bytes=0-');
+});
+
+test('an upstream 403 on an Innertube URL retries once through yt-dlp and caches the result', async (t) => {
+  const future = Math.floor(Date.now() / 1000) + 600;
+  const innertubeUrl = `https://r1---sn.googlevideo.com/videoplayback?signature=inn403&expire=${future}`;
+  const ytdlpUrl = `https://r1---sn.googlevideo.com/videoplayback?signature=ytd403&expire=${future}`;
+  const upstreamCalls = [];
+  let innertubeCalls = 0;
+  let spawnCount = 0;
+  const requestUpstream = (url, options, onResponse) => {
+    upstreamCalls.push({ url: url.toString(), headers: options.headers });
+    const request = new EventEmitter();
+    request.end = () => setImmediate(() => {
+      const response = new PassThrough();
+      if (url.toString() === innertubeUrl) {
+        response.statusCode = 403;
+        response.headers = {};
+        onResponse(response);
+        response.end();
+      } else {
+        response.statusCode = 200;
+        response.headers = {};
+        onResponse(response);
+        response.end('audio-data');
+      }
+    });
+    request.destroy = () => {};
+    return request;
+  };
+  const baseUrl = await startAppServer(t, {
+    innertubeResolver: async () => {
+      innertubeCalls += 1;
+      return { url: innertubeUrl, httpHeaders: { 'User-Agent': 'innertube-test' }, resolveMs: 1, resolver: 'innertube' };
+    },
+    spawnProcess: createSpawnProcess({
+      stdout: JSON.stringify({ url: ytdlpUrl, http_headers: { 'User-Agent': 'yt-dlp-test' } }),
+      onSpawn: () => { spawnCount += 1; },
+    }),
+    requestUpstream,
+    downloaderPath: 'yt-dlp-test',
+  });
+
+  const first = await fetch(`${baseUrl}/stream/abcdefghijk`);
+  assert.equal(first.status, 200);
+  assert.equal(await first.text(), 'audio-data');
+  assert.equal(innertubeCalls, 1);
+  assert.equal(spawnCount, 1);
+  assert.deepEqual(upstreamCalls.map((call) => call.url), [innertubeUrl, ytdlpUrl]);
+  assert.deepEqual(upstreamCalls[1].headers, { 'User-Agent': 'yt-dlp-test', Range: 'bytes=0-' });
+
+  const second = await fetch(`${baseUrl}/stream/abcdefghijk`);
+  assert.equal(second.status, 200);
+  assert.equal(await second.text(), 'audio-data');
+  assert.equal(innertubeCalls, 1);
+  assert.equal(spawnCount, 1);
+  assert.equal(upstreamCalls[2].url, ytdlpUrl);
+});
+
+const RANGE_DATA = '0123456789'.repeat(10);
+
+function innertubeStub(url, counter = { calls: 0 }) {
+  return async () => {
+    counter.calls += 1;
+    return { url, httpHeaders: { 'User-Agent': 'innertube-test' }, resolveMs: 1, resolver: 'innertube' };
+  };
+}
+
+// Upstream falso que respeita Range e devolve Content-Range. failFrom devolve 403 a partir desse byte.
+function createRangeUpstream(data, requests, failFrom = null) {
+  return (target, options, onResponse) => {
+    requests.push({ url: target.toString(), range: options.headers.Range });
+    const match = /^bytes=(\d+)-(\d*)$/.exec(options.headers.Range ?? '');
+    const request = new EventEmitter();
+    request.destroyed = false;
+    request.end = () => setImmediate(() => {
+      const response = new PassThrough();
+      const from = Number(match[1]);
+      const to = Math.min(match[2] === '' ? data.length - 1 : Number(match[2]), data.length - 1);
+      if (failFrom !== null && from >= failFrom) {
+        response.statusCode = 403;
+        response.headers = {};
+        onResponse(response);
+        response.end();
+        return;
+      }
+      response.statusCode = 206;
+      response.headers = {
+        'accept-ranges': 'bytes',
+        'content-range': `bytes ${from}-${to}/${data.length}`,
+        'content-length': String(to - from + 1),
+        'content-type': 'audio/mp4',
+      };
+      onResponse(response);
+      response.end(data.slice(from, to + 1));
+    });
+    request.destroy = () => {
+      request.destroyed = true;
+    };
+    return request;
+  };
+}
+
+test('chunked Innertube stream without a client Range joins the blocks into a 200 response', async (t) => {
+  const data = RANGE_DATA.slice(0, 10);
+  const requests = [];
+  const baseUrl = await startAppServer(t, {
+    upstreamChunkBytes: 4,
+    innertubeResolver: innertubeStub('https://r1---sn.googlevideo.com/videoplayback?signature=chunk-a'),
+    requestUpstream: createRangeUpstream(data, requests),
+    downloaderPath: 'yt-dlp-test',
+  });
+
+  const response = await fetch(`${baseUrl}/stream/abcdefghijk`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-range'), null);
+  assert.equal(response.headers.get('content-length'), '10');
+  assert.equal(await response.text(), data);
+  assert.deepEqual(requests.map((request) => request.range), ['bytes=0-3', 'bytes=4-7', 'bytes=8-9']);
+});
+
+test('chunked Innertube stream answers a bounded client Range with 206 and Content-Range', async (t) => {
+  const requests = [];
+  const baseUrl = await startAppServer(t, {
+    upstreamChunkBytes: 4,
+    innertubeResolver: innertubeStub('https://r1---sn.googlevideo.com/videoplayback?signature=chunk-b'),
+    requestUpstream: createRangeUpstream(RANGE_DATA, requests),
+    downloaderPath: 'yt-dlp-test',
+  });
+
+  const response = await fetch(`${baseUrl}/stream/abcdefghijk`, { headers: { Range: 'bytes=10-19' } });
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get('content-range'), 'bytes 10-19/100');
+  assert.equal(response.headers.get('content-length'), '10');
+  assert.equal(await response.text(), RANGE_DATA.slice(10, 20));
+  assert.deepEqual(requests.map((request) => request.range), ['bytes=10-13', 'bytes=14-17', 'bytes=18-19']);
+});
+
+test('chunked Innertube stream answers an open-ended client Range up to the end of the audio', async (t) => {
+  const requests = [];
+  const baseUrl = await startAppServer(t, {
+    upstreamChunkBytes: 4,
+    innertubeResolver: innertubeStub('https://r1---sn.googlevideo.com/videoplayback?signature=chunk-c'),
+    requestUpstream: createRangeUpstream(RANGE_DATA, requests),
+    downloaderPath: 'yt-dlp-test',
+  });
+
+  const response = await fetch(`${baseUrl}/stream/abcdefghijk`, { headers: { Range: 'bytes=95-' } });
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get('content-range'), 'bytes 95-99/100');
+  assert.equal(response.headers.get('content-length'), '5');
+  assert.equal(await response.text(), RANGE_DATA.slice(95));
+  assert.deepEqual(requests.map((request) => request.range), ['bytes=95-98', 'bytes=99-99']);
+});
+
+test('cancelling the app request destroys the active Innertube block request', async (t) => {
+  const requests = [];
+  const requestUpstream = (_target, _options, onResponse) => {
+    const request = new EventEmitter();
+    request.destroyed = false;
+    request.end = () => setImmediate(() => {
+      const response = new PassThrough();
+      response.statusCode = 206;
+      response.headers = { 'content-range': 'bytes 0-3/100', 'content-length': '4' };
+      onResponse(response);
+      response.write('ab'); // o bloco nunca termina
+    });
+    request.destroy = () => {
+      request.destroyed = true;
+    };
+    requests.push(request);
+    return request;
+  };
+  const baseUrl = await startAppServer(t, {
+    upstreamChunkBytes: 4,
+    innertubeResolver: innertubeStub('https://r1---sn.googlevideo.com/videoplayback?signature=cancel'),
+    requestUpstream,
+    downloaderPath: 'yt-dlp-test',
+  });
+
+  const controller = new AbortController();
+  const response = await fetch(`${baseUrl}/stream/abcdefghijk`, { signal: controller.signal });
+  assert.equal(response.status, 200);
+  const reader = response.body.getReader();
+  await reader.read();
+  controller.abort();
+  await reader.read().catch(() => {});
+
+  for (let i = 0; i < 100 && !requests[0].destroyed; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].destroyed, true);
+});
+
+test('a 403 on a later Innertube block drops the cached resolution', async (t) => {
+  const future = Math.floor(Date.now() / 1000) + 600;
+  const url = `https://r1---sn.googlevideo.com/videoplayback?signature=block403&expire=${future}`;
+  const counter = { calls: 0 };
+  const baseUrl = await startAppServer(t, {
+    upstreamChunkBytes: 4,
+    innertubeResolver: innertubeStub(url, counter),
+    requestUpstream: createRangeUpstream(RANGE_DATA.slice(0, 10), [], 4),
+    downloaderPath: 'yt-dlp-test',
+  });
+
+  const first = await fetch(`${baseUrl}/stream/abcdefghijk`);
+  assert.equal(first.status, 200);
+  const cutBody = await first.arrayBuffer().catch((error) => error);
+  assert.ok(cutBody instanceof Error);
+  assert.equal(counter.calls, 1);
+
+  const second = await fetch(`${baseUrl}/stream/abcdefghijk`);
+  assert.equal(second.status, 200);
+  await second.arrayBuffer().catch(() => {});
+  assert.equal(counter.calls, 2);
+});
+
+const silentLogger = { log() {}, info() {}, warn() {}, error() {} };
+
+async function startAppServer(t, options) {
+  const server = createApp({ ...options, logger: silentLogger }).listen(0, '127.0.0.1');
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await new Promise((resolve) => server.once('listening', resolve));
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+function createSpawnProcess({ stdout = '', exitCode = 0, onSpawn = () => {} } = {}) {
+  return (_path, args) => {
+    onSpawn(args);
+    const process = new EventEmitter();
+    process.exitCode = null;
+    process.signalCode = null;
+    process.stdout = new PassThrough();
+    process.stderr = new PassThrough();
+    process.kill = () => true;
+    setImmediate(() => {
+      process.stdout.end(stdout);
+      process.stderr.end(exitCode === 0 ? '' : 'ERROR: HTTP Error 403: Forbidden\n');
+      process.exitCode = exitCode;
+      process.emit('close', exitCode);
+    });
+    return process;
+  };
+}
+
+function createAudioUpstream(calls) {
+  return (url, options, onResponse) => {
+    calls.push({ url: url.toString(), headers: options.headers });
+    const request = new EventEmitter();
+    request.end = () => setImmediate(() => {
+      const response = new PassThrough();
+      response.statusCode = 200;
+      response.headers = {};
+      onResponse(response);
+      response.end('audio-data');
+    });
+    request.destroy = () => {};
+    return request;
+  };
+}
+
+test('Innertube resolves the stream and yt-dlp is not spawned', async (t) => {
+  const expectedUrl = 'https://r1---sn.googlevideo.com/videoplayback?signature=inn';
+  const upstreamCalls = [];
+  let innertubeCalls = 0;
+  let spawnCount = 0;
+  const baseUrl = await startAppServer(t, {
+    innertubeResolver: async () => {
+      innertubeCalls += 1;
+      return { url: expectedUrl, httpHeaders: { 'User-Agent': 'innertube-test' }, resolveMs: 1, resolver: 'innertube' };
+    },
+    spawnProcess: createSpawnProcess({ onSpawn: () => { spawnCount += 1; } }),
+    requestUpstream: createAudioUpstream(upstreamCalls),
+    downloaderPath: 'yt-dlp-test',
+  });
+
+  const response = await fetch(`${baseUrl}/stream/abcdefghijk`);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'audio-data');
+  assert.equal(innertubeCalls, 1);
+  assert.equal(spawnCount, 0);
+  assert.equal(upstreamCalls[0].url, expectedUrl);
+  assert.deepEqual(upstreamCalls[0].headers, { 'User-Agent': 'innertube-test', Range: 'bytes=0-262143' });
+});
+
+test('yt-dlp is used when Innertube fails', async (t) => {
+  const expectedUrl = 'https://r1---sn.googlevideo.com/videoplayback?signature=ytd';
+  const upstreamCalls = [];
+  let spawnCount = 0;
+  const baseUrl = await startAppServer(t, {
+    innertubeResolver: async () => {
+      throw new Error('Innertube failed (ANDROID_VR: boom)');
+    },
+    spawnProcess: createSpawnProcess({
+      stdout: JSON.stringify({ url: expectedUrl, http_headers: {} }),
+      onSpawn: () => { spawnCount += 1; },
+    }),
+    requestUpstream: createAudioUpstream(upstreamCalls),
+    downloaderPath: 'yt-dlp-test',
+  });
+
+  const response = await fetch(`${baseUrl}/stream/abcdefghijk`);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'audio-data');
+  assert.equal(spawnCount, 1);
+  assert.equal(upstreamCalls[0].url, expectedUrl);
+});
+
+test('stream returns 502 when Innertube and yt-dlp both fail', async (t) => {
+  let spawnCount = 0;
+  const baseUrl = await startAppServer(t, {
+    innertubeResolver: async () => {
+      throw new Error('Innertube failed');
+    },
+    spawnProcess: createSpawnProcess({
+      exitCode: 1,
+      onSpawn: () => { spawnCount += 1; },
+    }),
+    downloaderPath: 'yt-dlp-test',
+  });
+
+  const response = await fetch(`${baseUrl}/stream/abcdefghijk`);
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), { error: 'stream_unavailable' });
+  assert.equal(spawnCount, 1);
 });

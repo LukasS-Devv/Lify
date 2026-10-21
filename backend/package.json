@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "express": "^4.21.2",
-    "youtube-dl-exec": "^3.1.17"
+    "youtube-dl-exec": "^3.1.17",
+    "youtubei.js": "^18.2.0"
   },
   "allowScripts": {
     "youtube-dl-exec": true
