@@ -1,7 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { PlaylistSummary, Track } from '@/types';
 import { favoritesRepo, getDb, playlistsRepo } from '@/database';
+import {
+  getTrackDownloadState, isDownloadCancelled, removeTrackDownload, startTrackDownload,
+  type DownloadProgress, type TrackDownloadState, type TrackDownloadTask,
+} from '@/features/downloads';
 import { toggleFavoriteWithFeedback } from '@/features/favorites/favoriteFeedback';
 import { addToQueueEnd, addToQueueNext } from '@/services/audio/controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,15 +24,37 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
   const [lists, setLists] = useState<PlaylistSummary[]>([]);
   const [showLists, setShowLists] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [downloadState, setDownloadState] = useState<TrackDownloadState['status']>('none');
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  const downloadTask = useRef<TrackDownloadTask | null>(null);
 
   useEffect(() => {
     if (!track) return;
     setShowLists(false); setMsg(null);
+    setDownloadState('none');
+    setDownloadProgress(null);
+    setDownloadBusy(false);
+    let active = true;
     (async () => {
       const db = await getDb();
-      setFav(await favoritesRepo.isFavorite(db, track.id));
-      setLists(await playlistsRepo.listPlaylists(db));
-    })().catch(() => {});
+      const favorite = await favoritesRepo.isFavorite(db, track.id);
+      const playlists = await playlistsRepo.listPlaylists(db);
+      if (!active) return;
+      setFav(favorite);
+      setLists(playlists);
+      if (track.source === 'youtube') {
+        const state = await getTrackDownloadState(track.id);
+        if (active) setDownloadState(state.status);
+      }
+    })().catch((error: unknown) => {
+      if (active) setMsg(error instanceof Error ? error.message : t('common.error'));
+    });
+    return () => {
+      active = false;
+      downloadTask.current?.cancel();
+      downloadTask.current = null;
+    };
   }, [track]);
 
   if (!track) return null;
@@ -43,6 +69,42 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
     }
   };
 
+  const downloadOrRemove = async () => {
+    if (downloadBusy) return;
+    if (downloadState === 'available') {
+      await run(async () => {
+        await removeTrackDownload(track.id);
+        setDownloadState('none');
+        return t('actions.downloadRemoved');
+      });
+      return;
+    }
+
+    setDownloadBusy(true);
+    setDownloadProgress({ fraction: 0, bytesWritten: 0, totalBytes: 0 });
+    try {
+      const task = startTrackDownload(track, setDownloadProgress);
+      downloadTask.current = task;
+      await task.promise;
+      setDownloadState('available');
+      setMsg(t('actions.downloadComplete'));
+    } catch (error) {
+      setMsg(isDownloadCancelled(error)
+        ? t('downloads.cancelled')
+        : error instanceof Error ? error.message : t('common.error'));
+    } finally {
+      downloadTask.current = null;
+      setDownloadBusy(false);
+      setDownloadProgress(null);
+    }
+  };
+
+  const removeInvalidDownloadRecord = () => run(async () => {
+    await removeTrackDownload(track.id);
+    setDownloadState('none');
+    return t('actions.downloadRemoved');
+  });
+
   return (
     <Modal transparent animationType="fade" visible onRequestClose={onClose}>
       <Pressable style={s.backdrop} onPress={onClose} />
@@ -55,6 +117,19 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
           </View>
         </View>
         {msg ? <Text style={s.msg}>{msg}</Text> : null}
+        {downloadState === 'invalid' ? <Text style={s.invalid}>{t('downloads.invalid')}</Text> : null}
+        {downloadBusy ? (
+          <View style={s.downloadStatus}>
+            <Text style={s.sub}>
+              {downloadProgress?.fraction === null || downloadProgress?.fraction === undefined
+                ? t('downloads.inProgress')
+                : `${t('downloads.inProgress')} · ${Math.round(downloadProgress.fraction * 100)}%`}
+            </Text>
+            <View style={s.progressTrack}>
+              <View style={[s.progressFill, { width: `${Math.round((downloadProgress?.fraction ?? 0) * 100)}%` }]} />
+            </View>
+          </View>
+        ) : null}
 
         {showLists ? (
           <ScrollView style={{ maxHeight: 280 }}>
@@ -76,6 +151,23 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
             <Item icon="add-circle-outline" showIcon={showIcons} label={t('actions.addToPlaylist')} onPress={() => setShowLists(true)} />
             <Item icon="play-forward-outline" showIcon={showIcons} label={t('actions.playNext')} onPress={() => run(() => { addToQueueNext(track); return t('actions.queued'); })} />
             <Item icon="list-outline" showIcon={showIcons} label={t('actions.addToQueue')} onPress={() => run(() => { addToQueueEnd([track]); return t('actions.queued'); })} />
+            {track.source === 'youtube' && !downloadBusy ? (
+              <Item
+                icon={downloadState === 'available' ? 'checkmark-circle-outline' : 'download-outline'}
+                showIcon={showIcons}
+                label={downloadState === 'available' ? t('actions.downloaded') : t('actions.download')}
+                danger={downloadState === 'available'}
+                onPress={() => void downloadOrRemove()}
+              />
+            ) : null}
+            {downloadBusy ? (
+              <Item icon="close-circle-outline" showIcon={showIcons} label={t('downloads.cancel')} danger
+                onPress={() => downloadTask.current?.cancel()} />
+            ) : null}
+            {track.source === 'youtube' && downloadState === 'invalid' && !downloadBusy ? (
+              <Item icon="trash-outline" showIcon={showIcons} label={t('downloads.removeRecord')} danger
+                onPress={() => void removeInvalidDownloadRecord()} />
+            ) : null}
             {onSleepTimer ? <Item icon="timer-outline" showIcon={showIcons} label={t('player.sleepTimer.open')} onPress={onSleepTimer} /> : null}
             {onRemoveFromPlaylist ? (
               <Item icon="trash-outline" showIcon={showIcons} label={t('actions.removeFromPlaylist')} danger onPress={() => { onRemoveFromPlaylist(track); onClose(); }} />
@@ -105,6 +197,10 @@ const s = StyleSheet.create({
   title: { color: colors.text, fontSize: font.lg, fontWeight: '700' },
   sub: { color: colors.textMuted, fontSize: font.md },
   msg: { color: colors.accent, marginBottom: spacing.sm, fontSize: font.md },
+  invalid: { color: colors.danger, marginBottom: spacing.sm, fontSize: font.sm },
+  downloadStatus: { gap: spacing.xs, marginBottom: spacing.sm },
+  progressTrack: { height: 4, borderRadius: 2, backgroundColor: colors.surface, overflow: 'hidden' },
+  progressFill: { height: 4, backgroundColor: colors.accent },
   item: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 14 },
   itemText: { fontSize: font.lg },
 });

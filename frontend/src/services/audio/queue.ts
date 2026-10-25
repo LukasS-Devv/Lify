@@ -79,6 +79,10 @@ export function nextIndex(q: QueueState, repeat: RepeatMode, manual: boolean): n
   return q.index + 1 < q.items.length ? q.index + 1 : null;
 }
 
+export function shouldFetchRecommendations(q: QueueState, repeat: RepeatMode): boolean {
+  return repeat === 'off' && currentOf(q)?.source === 'youtube' && nextIndex(q, 'off', false) === null;
+}
+
 export function prevIndex(q: QueueState, repeat: RepeatMode): number | null {
   if (q.items.length === 0) return null;
   if (repeat === 'reverse') {

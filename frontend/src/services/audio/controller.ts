@@ -5,12 +5,17 @@ import TrackPlayer, {
   State,
   type Track as NativeTrack,
 } from 'react-native-track-player';
+import { Alert } from 'react-native';
 import { catalog } from '@/services/catalog';
 import { getDb, historyRepo, settingsRepo } from '@/database';
 import type { RepeatMode, Track } from '@/types';
 import {
+  DownloadedTrackUnavailableError, getTrackDownloadState, removeTrackDownload, resolveDownloadedTrack, startTrackDownload,
+  type TrackDownloadTask,
+} from '@/features/downloads';
+import {
   currentOf, appendRecommended, dropRecommended, nextIndex, playNext as qPlayNext, prevIndex,
-  enqueue as qEnqueue, removeAt, setQueue, shuffleRest, emptyQueue,
+  enqueue as qEnqueue, removeAt, setQueue, shuffleRest, emptyQueue, shouldFetchRecommendations,
 } from './queue';
 import { usePlayerStore, type PlayerStatus } from './store';
 import { t as tr } from '@/i18n';
@@ -182,9 +187,12 @@ async function loadAndPlay(track: Track, startAt = 0, isRetry = false): Promise<
   store().set({ status: 'loading', error: null });
   try {
     await setupAudio();
-    const stream = track.source === 'local'
-      ? { url: track.sourceId, mimeType: null }
-      : await catalog.getStream(track);
+    const download = track.source === 'youtube' ? await resolveDownloadedTrack(track.id) : null;
+    const stream = download
+      ? { url: download.uri, mimeType: download.mimeType }
+      : track.source === 'local'
+        ? { url: track.sourceId, mimeType: null }
+        : await catalog.getStream(track);
     if (token !== loadToken) return; // usuário já escolheu outra faixa
 
     await serializeNative(async () => {
@@ -210,10 +218,14 @@ async function loadAndPlay(track: Track, startAt = 0, isRetry = false): Promise<
     if (token !== loadToken) return;
     if (!isRetry) {
       void recordHistory(track);
-      void maybeFillQueue().catch(() => {}).then(prefetchNext);
+      prefetchNext();
     }
   } catch (e) {
     if (token !== loadToken) return;
+    if (e instanceof DownloadedTrackUnavailableError) {
+      await showDownloadedTrackError(track, token, e.message);
+      return;
+    }
     await onTrackFailed(track, token, e instanceof Error ? e.message : tr('player.error'), startAt);
   }
 }
@@ -225,6 +237,23 @@ async function loadAndPlay(track: Track, startAt = 0, isRetry = false): Promise<
 async function onTrackFailed(track: Track, token: number, message: string, startAt: number): Promise<void> {
   if (token !== loadToken || currentOf(store().queue)?.id !== track.id || handledFailureToken === token) return;
   handledFailureToken = token;
+
+  if (track.source === 'youtube') {
+    try {
+      const download = await getTrackDownloadState(track.id);
+      if (token !== loadToken) return;
+      if (download.status !== 'none') {
+        await showDownloadedTrackError(
+          track,
+          token,
+          download.status === 'invalid' ? tr('downloads.fileMissing') : tr('downloads.fileInvalid'),
+        );
+        return;
+      }
+    } catch (error) {
+      console.error('[downloads] Could not inspect a download after playback failed', error);
+    }
+  }
 
   if (automaticRetry?.trackId !== track.id) {
     automaticRetry = { trackId: track.id, attempts: 0, stableAfterPosition: startAt + RETRY_STABILITY_SECONDS };
@@ -244,6 +273,59 @@ async function onTrackFailed(track: Track, token: number, message: string, start
   if (token === loadToken && currentOf(store().queue)?.id === track.id) {
     store().set({ status: 'error', error: message });
   }
+}
+
+async function showDownloadedTrackError(track: Track, token: number, message: string): Promise<void> {
+  try {
+    await serializeNative(async () => {
+      if (token === loadToken) await TrackPlayer.pause();
+    });
+  } catch (pauseError) {
+    console.warn('[player] Could not pause after finding an invalid download', pauseError);
+  }
+  if (token !== loadToken) return;
+  store().set({ status: 'error', error: message });
+  Alert.alert(tr('downloads.fileMissingTitle'), message, [
+    {
+      text: tr('downloads.removeRecord'),
+      style: 'destructive',
+      onPress: () => {
+        void removeTrackDownload(track.id).catch((error: unknown) => {
+          console.error('[downloads] Could not remove an invalid download record', error);
+          store().set({
+            status: 'error',
+            error: error instanceof Error ? error.message : tr('common.error'),
+          });
+        });
+      },
+    },
+    {
+      text: tr('downloads.retry'),
+      onPress: () => {
+        let task: TrackDownloadTask;
+        try {
+          task = startTrackDownload(track, undefined, true);
+        } catch (error) {
+          store().set({
+            status: 'error',
+            error: error instanceof Error ? error.message : tr('common.error'),
+          });
+          return;
+        }
+        const retryToken = ++loadToken;
+        store().set({ status: 'loading', error: null });
+        void task.promise.then(
+          () => { if (retryToken === loadToken) void loadAndPlay(track); },
+          (error: unknown) => {
+            if (retryToken === loadToken) store().set({
+              status: 'error',
+              error: error instanceof Error ? error.message : tr('common.error'),
+            });
+          },
+        );
+      },
+    },
+  ]);
 }
 
 async function recordHistory(track: Track) {
@@ -269,8 +351,9 @@ async function maybeFillQueue() {
   const cur = currentOf(queue);
   if (!cur || cur.source !== 'youtube') return;
   const related = await catalog.getRelated(cur);
-  const now = store().queue;
-  if (currentOf(now)?.id !== cur.id) return; // mudou enquanto buscava
+  const state = store();
+  const now = state.queue;
+  if (state.repeat !== 'off' || currentOf(now)?.id !== cur.id) return; // estado mudou enquanto buscava
   const known = new Set(now.items.map((t) => t.id));
   const fresh = related.filter((t) => !known.has(t.id));
   if (fresh.length) store().set({ queue: appendRecommended(now, fresh) });
@@ -404,7 +487,6 @@ export async function setRepeat(mode: RepeatMode) {
   store().set({ repeat: mode });
   if (mode !== 'off') store().set({ queue: dropRecommended(store().queue) });
   prefetchNext();
-  if (mode === 'off') void maybeFillQueue().catch(() => {}).then(prefetchNext);
   try { await settingsRepo.saveSetting(await getDb(), 'repeatMode', mode); } catch { /* */ }
 }
 
@@ -425,6 +507,10 @@ async function onQueueEnded(event: { track: number; position: number }): Promise
     const active = await TrackPlayer.getActiveTrack().catch(() => undefined);
     if (currentOf(store().queue)?.id !== cur.id || (active && String(active.id) !== cur.id)) return;
     lastQueueEndEvent = queueEndSignature(event, Date.now());
+    if (shouldFetchRecommendations(store().queue, store().repeat)) {
+      await maybeFillQueue().catch(() => {});
+      if (currentOf(store().queue)?.id !== cur.id) return;
+    }
     await next(false);
   } finally {
     if (queueEndTrackId === cur.id) queueEndTrackId = null;

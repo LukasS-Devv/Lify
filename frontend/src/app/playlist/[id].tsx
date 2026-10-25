@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { Alert, FlatList, PanResponder, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, FlatList, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,10 +16,23 @@ import { shuffled } from '@/utils/array';
 import { gradientFor } from '@/utils/color';
 import { formatTotalDuration } from '@/utils/track';
 import { importLocalAudioToPlaylist } from '@/storage/localAudio';
+import {
+  getDownloadedTrackIds, isDownloadCancelled, startTrackDownload, type DownloadProgress,
+  type TrackDownloadTask,
+} from '@/features/downloads';
 import { moveItem } from '@/utils/moveItem';
 import { colors, font, layout, spacing } from '@/theme/tokens';
 
 const COVER = 190;
+
+type PlaylistDownloadStatus = 'queued' | 'downloading' | 'completed' | 'failed' | 'cancelled';
+
+interface PlaylistDownloadRow {
+  track: Track;
+  status: PlaylistDownloadStatus;
+  progress: DownloadProgress | null;
+  error?: string;
+}
 
 export default function PlaylistDetail() {
   useTranslation();
@@ -37,6 +50,17 @@ export default function PlaylistDetail() {
   const [renameError, setRenameError] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
   const [draggedTracks, setDraggedTracks] = useState<Track[] | null>(null);
+  const [downloadRows, setDownloadRows] = useState<PlaylistDownloadRow[]>([]);
+  const [downloadQueueRunning, setDownloadQueueRunning] = useState(false);
+  const activeDownload = useRef<TrackDownloadTask | null>(null);
+  const cancelDownloadQueue = useRef(false);
+  const queueRunning = useRef(false);
+  const screenMounted = useRef(true);
+  const downloadRowsRef = useRef(downloadRows);
+  downloadRowsRef.current = downloadRows;
+  const updateDownloadRows = (update: (rows: PlaylistDownloadRow[]) => PlaylistDownloadRow[]) => {
+    if (screenMounted.current) setDownloadRows(update);
+  };
   const dragStart = useRef<number | null>(null);
   const dragTarget = useRef<number | null>(null);
   const tracksRef = useRef(tracks);
@@ -68,6 +92,14 @@ export default function PlaylistDetail() {
       setDraggedTracks(null);
     }
   }, [move]);
+  useEffect(() => {
+    screenMounted.current = true;
+    return () => {
+      screenMounted.current = false;
+      cancelDownloadQueue.current = true;
+      activeDownload.current?.cancel();
+    };
+  }, []);
   const confirmDelete = () =>
     Alert.alert(t('playlist.deleteTitle'), t('playlist.deleteMessage', { name: playlist?.name ?? '' }), [
       { text: t('common.cancel'), style: 'cancel' },
@@ -94,6 +126,27 @@ export default function PlaylistDetail() {
     }] : []),
     { icon: 'swap-vertical', label: reordering ? t('playlist.doneReordering') : t('playlist.reorder'), onPress: () => setReordering((r) => !r) },
     ...(tracks.length ? [{ icon: 'list-outline' as const, label: t('playlist.addToQueue'), onPress: () => addToQueueEnd(tracks) }] : []),
+    ...(downloadQueueRunning
+      ? [{
+        icon: 'close-circle-outline' as const,
+        label: t('downloads.cancelQueue'),
+        onPress: () => {
+          cancelDownloadQueue.current = true;
+          activeDownload.current?.cancel();
+        },
+      }]
+      : [
+        ...(tracks.length ? [{
+          icon: 'download-outline' as const,
+          label: t('playlist.download'),
+          onPress: () => void runPlaylistDownloads(false),
+        }] : []),
+        ...(tracks.length && downloadRows.some((row) => row.status === 'failed') ? [{
+          icon: 'refresh-outline' as const,
+          label: t('playlist.retryDownloads'),
+          onPress: () => void runPlaylistDownloads(true),
+        }] : []),
+      ]),
     { icon: 'folder-open-outline', label: t('playlist.importLocalAudio'), onPress: () => void importLocalAudio() },
     { icon: 'trash-outline', label: t('common.delete'), danger: true, onPress: confirmDelete },
   ];
@@ -119,6 +172,97 @@ export default function PlaylistDetail() {
     }
   }
 
+  async function runPlaylistDownloads(retryFailures: boolean) {
+    if (queueRunning.current || !tracks.length) return;
+    queueRunning.current = true;
+    cancelDownloadQueue.current = false;
+    setDownloadQueueRunning(true);
+    try {
+      const downloadedIds = await getDownloadedTrackIds(tracks.map((track) => track.id));
+      const availableIds = new Set([
+        ...downloadedIds,
+        ...tracks.filter((track) => track.source === 'local').map((track) => track.id),
+      ]);
+      const failedIds = new Set(
+        downloadRowsRef.current.filter((row) => row.status === 'failed').map((row) => row.track.id),
+      );
+      const candidates = retryFailures
+        ? tracks.filter((track) => track.source === 'youtube' && failedIds.has(track.id) && !availableIds.has(track.id))
+        : tracks.filter((track) => track.source === 'youtube' && !availableIds.has(track.id));
+
+      if (!retryFailures) {
+        if (screenMounted.current) {
+          setDownloadRows(tracks.map((track) => ({
+            track,
+            status: availableIds.has(track.id) ? 'completed' : 'queued',
+            progress: null,
+          })));
+        }
+      } else {
+        updateDownloadRows((rows) => rows.map((row) => {
+          if (availableIds.has(row.track.id)) return { ...row, status: 'completed', progress: null };
+          if (failedIds.has(row.track.id)) return { ...row, status: 'queued', progress: null, error: undefined };
+          return row;
+        }));
+      }
+
+      for (const track of candidates) {
+        if (cancelDownloadQueue.current) break;
+        updateDownloadRows((rows) => rows.map((row) => row.track.id === track.id
+          ? { ...row, status: 'downloading', progress: null }
+          : row));
+        try {
+          const task = startTrackDownload(track, (progress) => {
+            updateDownloadRows((rows) => rows.map((row) => row.track.id === track.id
+              ? { ...row, progress }
+              : row));
+          });
+          activeDownload.current = task;
+          await task.promise;
+          updateDownloadRows((rows) => rows.map((row) => row.track.id === track.id
+            ? { ...row, status: 'completed', progress: { fraction: 1, bytesWritten: 0, totalBytes: 0 }, error: undefined }
+            : row));
+        } catch (error) {
+          if (isDownloadCancelled(error) || cancelDownloadQueue.current) {
+            updateDownloadRows((rows) => rows.map((row) => row.track.id === track.id
+              ? { ...row, status: 'cancelled', progress: null }
+              : row));
+            break;
+          }
+          updateDownloadRows((rows) => rows.map((row) => row.track.id === track.id
+            ? { ...row, status: 'failed', progress: null, error: error instanceof Error ? error.message : t('common.error') }
+            : row));
+        } finally {
+          activeDownload.current = null;
+        }
+      }
+
+      if (cancelDownloadQueue.current) {
+        updateDownloadRows((rows) => rows.map((row) => row.status === 'queued'
+          ? { ...row, status: 'cancelled' }
+          : row));
+      }
+    } catch (error) {
+      if (screenMounted.current) {
+        Alert.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
+      }
+    } finally {
+      queueRunning.current = false;
+      if (screenMounted.current) setDownloadQueueRunning(false);
+    }
+  }
+
+  const completedDownloads = downloadRows.filter((row) => row.status === 'completed').length;
+  const activeDownloads = downloadRows.filter((row) => row.status === 'downloading').length;
+  const failedDownloads = downloadRows.filter((row) => row.status === 'failed').length;
+  const overallProgress = tracks.length > 0
+    ? Math.round(downloadRows.reduce((total, row) => {
+      if (row.status === 'completed') return total + 1;
+      if (row.status === 'downloading') return total + (row.progress?.fraction ?? 0);
+      return total;
+    }, 0) / tracks.length * 100)
+    : 0;
+
   const seed = `pl-${playlistId}`;
   const [top] = gradientFor(seed, colors.bg);
   const meta = [t('common.tracks', { count: tracks.length }), formatTotalDuration(tracks)].filter(Boolean).join(' · ');
@@ -128,22 +272,68 @@ export default function PlaylistDetail() {
   };
 
   const header = (
-    <LinearGradient colors={[top, colors.bg]} style={[s.hero, { paddingTop: insets.top + 64 }]}>
-      {playlist?.customCoverUrl
-        ? <Cover uri={playlist.customCoverUrl} size={COVER} seed={seed} />
-        : <MosaicCover uris={tracks.slice(0, 4).map((tr) => tr.artworkUrl)} size={COVER} seed={seed} />}
-      <Text numberOfLines={2} style={s.title}>{playlist?.name ?? ''}</Text>
-      <Text style={s.meta}>{meta || t('playlist.kind')}</Text>
-      <View style={s.actions}>
-        <IconButton icon="shuffle" size={26} label={t('common.shuffle')} disabled={!tracks.length} onPress={() => void playPlaylist(0, true)} />
-        <PressableScale
-          accessibilityRole="button" accessibilityLabel={t('common.play')}
-          onPress={() => tracks.length && void playPlaylist(0)} style={[s.fab, !tracks.length && { opacity: 0.4 }]}
-        >
-          <Icon name="play" size={30} color={colors.accentText} />
-        </PressableScale>
-      </View>
-    </LinearGradient>
+    <View>
+      <LinearGradient colors={[top, colors.bg]} style={[s.hero, { paddingTop: insets.top + 64 }]}>
+        {playlist?.customCoverUrl
+          ? <Cover uri={playlist.customCoverUrl} size={COVER} seed={seed} />
+          : <MosaicCover uris={tracks.slice(0, 4).map((tr) => tr.artworkUrl)} size={COVER} seed={seed} />}
+        <Text numberOfLines={2} style={s.title}>{playlist?.name ?? ''}</Text>
+        <Text style={s.meta}>{meta || t('playlist.kind')}</Text>
+        <View style={s.actions}>
+          <IconButton icon="shuffle" size={26} label={t('common.shuffle')} disabled={!tracks.length} onPress={() => void playPlaylist(0, true)} />
+          <PressableScale
+            accessibilityRole="button" accessibilityLabel={t('common.play')}
+            onPress={() => tracks.length && void playPlaylist(0)} style={[s.fab, !tracks.length && { opacity: 0.4 }]}
+          >
+            <Icon name="play" size={30} color={colors.accentText} />
+          </PressableScale>
+        </View>
+      </LinearGradient>
+      {downloadRows.length > 0 ? (
+        <View style={s.downloadPanel}>
+          <View style={s.downloadHeader}>
+            <Text style={s.downloadSummary}>
+              {t('downloads.queueSummary', {
+                completed: completedDownloads,
+                total: tracks.length,
+                active: activeDownloads,
+                failed: failedDownloads,
+              })}
+            </Text>
+            {downloadQueueRunning ? (
+              <Pressable onPress={() => {
+                cancelDownloadQueue.current = true;
+                activeDownload.current?.cancel();
+              }}>
+                <Text style={s.cancelQueue}>{t('downloads.cancelQueue')}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+          <View style={s.downloadProgressTrack}>
+            <View style={[s.downloadProgressFill, { width: `${overallProgress}%` }]} />
+          </View>
+          <ScrollView style={s.downloadList} nestedScrollEnabled>
+            {downloadRows.map((row) => {
+              const status = row.status === 'failed'
+                ? t('downloads.failed', { error: row.error ?? t('common.error') })
+                : row.status === 'downloading'
+                  ? row.progress?.fraction === null || row.progress?.fraction === undefined
+                    ? t('downloads.inProgress')
+                    : `${t('downloads.inProgress')} · ${Math.round(row.progress.fraction * 100)}%`
+                  : t(`downloads.${row.status}` as const);
+              return (
+                <View key={row.track.id} style={s.downloadRow}>
+                  <Text numberOfLines={1} style={s.downloadTrack}>{row.track.title}</Text>
+                  <Text numberOfLines={1} style={[s.downloadState, row.status === 'failed' && { color: colors.danger }]}>
+                    {status}
+                  </Text>
+                </View>
+              );
+            })}
+          </ScrollView>
+        </View>
+      ) : null}
+    </View>
   );
 
   return (
@@ -237,5 +427,15 @@ const s = StyleSheet.create({
   meta: { color: colors.textMuted, fontSize: font.md },
   actions: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.sm },
   dragHandle: { paddingHorizontal: spacing.sm, paddingVertical: spacing.md },
+  downloadPanel: { marginHorizontal: spacing.md, marginBottom: spacing.md, padding: spacing.md, borderRadius: 12, backgroundColor: colors.surfaceAlt, gap: spacing.sm },
+  downloadHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  downloadSummary: { color: colors.text, fontSize: font.sm, flex: 1 },
+  cancelQueue: { color: colors.accent, fontSize: font.sm, fontWeight: '700' },
+  downloadProgressTrack: { height: 4, borderRadius: 2, backgroundColor: colors.surface, overflow: 'hidden' },
+  downloadProgressFill: { height: 4, backgroundColor: colors.accent },
+  downloadList: { maxHeight: 132 },
+  downloadRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm, paddingVertical: 3 },
+  downloadTrack: { color: colors.textMuted, fontSize: font.sm, flex: 1 },
+  downloadState: { color: colors.text, fontSize: font.sm },
   fab: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', paddingLeft: 4 },
 });

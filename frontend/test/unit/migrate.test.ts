@@ -131,7 +131,9 @@ test('the real migration list applies cleanly from scratch', async () => {
   for (const expected of ['tracks', 'playlists', 'playlist_tracks', 'favorites', 'history', 'settings', 'catalog_cache']) {
     assert.ok(names.includes(expected), `missing table ${expected}`);
   }
-  assert.equal(raw.prepare('PRAGMA user_version').get()!.user_version, 5);
+  assert.equal(raw.prepare('PRAGMA user_version').get()!.user_version, 6);
   const columns = raw.prepare("PRAGMA table_info('playlists')").all() as { name: string }[];
   assert.ok(columns.some((c) => c.name === 'pinned'), 'missing playlists.pinned');
+  const downloadColumns = raw.prepare("PRAGMA table_info('downloads')").all() as { name: string }[];
+  assert.deepEqual(downloadColumns.map((column) => column.name), ['track_id', 'local_path', 'downloaded_at']);
 });

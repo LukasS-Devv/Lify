@@ -10,6 +10,7 @@ import {
   prevIndex,
   removeAt,
   setQueue,
+  shouldFetchRecommendations,
   shuffleRest,
 } from '../../src/services/audio/queue';
 import type { Track } from '../../src/types';
@@ -82,6 +83,14 @@ test('nextIndex honours repeat modes', () => {
   // "próxima" manual ignora repeat one
   assert.equal(nextIndex({ items, index: 1 }, 'one', true), 2);
   assert.equal(nextIndex(emptyQueue, 'all', true), null);
+});
+
+test('recommendations are fetched only when an online queue ends without repeat', () => {
+  assert.equal(shouldFetchRecommendations({ items, index: 2 }, 'off'), true);
+  assert.equal(shouldFetchRecommendations({ items, index: 1 }, 'off'), false);
+  assert.equal(shouldFetchRecommendations({ items, index: 2 }, 'all'), false);
+  assert.equal(shouldFetchRecommendations({ items: [{ ...track('local'), source: 'local' }], index: 0 }, 'off'), false);
+  assert.equal(shouldFetchRecommendations(emptyQueue, 'off'), false);
 });
 
 test('prevIndex honours repeat all', () => {

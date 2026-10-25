@@ -89,6 +89,17 @@ export const migrations: Migration[] = [
     name: 'playlist-pins',
     sql: `ALTER TABLE playlists ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;`,
   },
+  {
+    version: 6,
+    name: 'track-downloads',
+    sql: `
+      CREATE TABLE downloads (
+        track_id TEXT PRIMARY KEY NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+        local_path TEXT NOT NULL,
+        downloaded_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 export const LATEST_VERSION = migrations[migrations.length - 1].version;
