@@ -1,10 +1,10 @@
-export type TrackSource = 'youtube';
+export type TrackSource = 'youtube' | 'local';
 
-/** Faixa do catálogo. `id` = `${source}:${sourceId}` para evitar colisões entre provedores. */
+/** Faixa do catálogo ou arquivo local. `id` distingue faixas de fontes diferentes. */
 export interface Track {
   id: string;
   source: TrackSource;
-  sourceId: string; // videoId no YouTube
+  sourceId: string; // videoId do YouTube ou URI local do arquivo
   title: string;
   artist: string;
   album: string | null;
@@ -32,23 +32,22 @@ export interface HistoryEntry {
   playedAt: number;
 }
 
-export type RepeatMode = 'off' | 'all' | 'one';
-export type PlaybackMode = 'dataSaver' | 'standard';
+export type RepeatMode = 'off' | 'all' | 'one' | 'reverse';
 
 export interface AppSettings {
   language: 'pt' | 'en';
   repeatMode: RepeatMode;
-  playbackMode: PlaybackMode;
-  autoQueue: boolean; // preencher fila automaticamente com relacionadas
   historyEnabled: boolean;
+  autoBackupIntervalDays: 0 | 1 | 7 | 30;
+  lastAutoBackupAt: number | null;
   customStreamServerUrl: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   language: 'pt',
   repeatMode: 'off',
-  playbackMode: 'standard',
-  autoQueue: true,
   historyEnabled: true,
+  autoBackupIntervalDays: 0,
+  lastAutoBackupAt: null,
   customStreamServerUrl: '',
 };

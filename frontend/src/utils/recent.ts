@@ -4,6 +4,15 @@ export type RecentEntry =
   | { kind: 'track'; key: string; track: Track; queueIndex: number }
   | { kind: 'playlist'; key: string; playlist: PlaylistSummary };
 
+export function uniqueRecentTracks(history: HistoryEntry[]): Track[] {
+  const seen = new Set<string>();
+  return history.flatMap(({ track }) => {
+    if (seen.has(track.id)) return [];
+    seen.add(track.id);
+    return [track];
+  });
+}
+
 /**
  * Uma entrada por faixa/playlist, do mais recente para o mais antigo.
  * Faixa tocada a partir de uma playlist conta só como a playlist.

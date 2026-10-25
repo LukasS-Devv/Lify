@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Alert, FlatList, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { Alert, FlatList, PanResponder, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,13 +8,15 @@ import {
   TrackActionsModal, TrackRow, TrackRowSkeleton, type SheetItem,
 } from '@/components';
 import { usePlaylistDetail } from '@/features/playlists/usePlaylists';
-import { addToQueueEnd, playQueue } from '@/services/audio/controller';
+import { addToQueueEnd, playQueue, setRepeat } from '@/services/audio/controller';
 import { selectCurrentTrack, usePlayerStore } from '@/services/audio/store';
 import { t, useTranslation } from '@/i18n';
 import type { Track } from '@/types';
 import { shuffled } from '@/utils/array';
 import { gradientFor } from '@/utils/color';
 import { formatTotalDuration } from '@/utils/track';
+import { importLocalAudioToPlaylist } from '@/storage/localAudio';
+import { moveItem } from '@/utils/moveItem';
 import { colors, font, layout, spacing } from '@/theme/tokens';
 
 const COVER = 190;
@@ -25,15 +27,47 @@ export default function PlaylistDetail() {
   const playlistId = Number(id);
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { data, loading, rename, remove, setPinned, removeTrack, move } = usePlaylistDetail(playlistId);
+  const { data, loading, reload, rename, remove, setPinned, removeTrack, move } = usePlaylistDetail(playlistId);
+  const { playlist, tracks } = data;
   const current = usePlayerStore(selectCurrentTrack);
   const [menuTrack, setMenuTrack] = useState<Track | null>(null);
   const [sheet, setSheet] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [importingLocalAudio, setImportingLocalAudio] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
-  const { playlist, tracks } = data;
-
+  const [draggedTracks, setDraggedTracks] = useState<Track[] | null>(null);
+  const dragStart = useRef<number | null>(null);
+  const dragTarget = useRef<number | null>(null);
+  const tracksRef = useRef(tracks);
+  tracksRef.current = tracks;
+  const displayedTracks = draggedTracks ?? tracks;
+  const dragStartAt = useCallback((index: number) => {
+    dragStart.current = index;
+    dragTarget.current = index;
+    setDraggedTracks(tracksRef.current);
+  }, []);
+  const dragTo = useCallback((start: number, offset: number) => {
+    const target = Math.max(0, Math.min(tracksRef.current.length - 1, start + Math.round(offset / 68)));
+    if (target === dragTarget.current) return;
+    dragTarget.current = target;
+    setDraggedTracks(moveItem(tracksRef.current, start, target));
+  }, []);
+  const finishDrag = useCallback((cancelled = false) => {
+    const from = dragStart.current;
+    const to = dragTarget.current;
+    dragStart.current = null;
+    dragTarget.current = null;
+    if (!cancelled && from !== null && to !== null && from !== to) {
+      void move(from, to)
+        .catch((error: unknown) => {
+          Alert.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
+        })
+        .finally(() => setDraggedTracks(null));
+    } else {
+      setDraggedTracks(null);
+    }
+  }, [move]);
   const confirmDelete = () =>
     Alert.alert(t('playlist.deleteTitle'), t('playlist.deleteMessage', { name: playlist?.name ?? '' }), [
       { text: t('common.cancel'), style: 'cancel' },
@@ -60,12 +94,38 @@ export default function PlaylistDetail() {
     }] : []),
     { icon: 'swap-vertical', label: reordering ? t('playlist.doneReordering') : t('playlist.reorder'), onPress: () => setReordering((r) => !r) },
     ...(tracks.length ? [{ icon: 'list-outline' as const, label: t('playlist.addToQueue'), onPress: () => addToQueueEnd(tracks) }] : []),
+    { icon: 'folder-open-outline', label: t('playlist.importLocalAudio'), onPress: () => void importLocalAudio() },
     { icon: 'trash-outline', label: t('common.delete'), danger: true, onPress: confirmDelete },
   ];
+
+  async function importLocalAudio() {
+    if (importingLocalAudio) return;
+    setImportingLocalAudio(true);
+    try {
+      const result = await importLocalAudioToPlaylist(playlistId);
+      if (result.status === 'cancelled') return;
+      await reload();
+      Alert.alert(
+        t('playlist.importLocalAudio'),
+        t('playlist.importLocalAudioResult', { added: result.added, skipped: result.skipped }),
+      );
+    } catch (error) {
+      Alert.alert(
+        t('playlist.importLocalAudio'),
+        error instanceof Error ? error.message : t('playlist.importLocalAudioFailed'),
+      );
+    } finally {
+      setImportingLocalAudio(false);
+    }
+  }
 
   const seed = `pl-${playlistId}`;
   const [top] = gradientFor(seed, colors.bg);
   const meta = [t('common.tracks', { count: tracks.length }), formatTotalDuration(tracks)].filter(Boolean).join(' · ');
+  const playPlaylist = async (startIndex: number, shuffledTracks = false) => {
+    await setRepeat('off');
+    await playQueue(shuffledTracks ? shuffled(tracks) : tracks, startIndex);
+  };
 
   const header = (
     <LinearGradient colors={[top, colors.bg]} style={[s.hero, { paddingTop: insets.top + 64 }]}>
@@ -75,10 +135,10 @@ export default function PlaylistDetail() {
       <Text numberOfLines={2} style={s.title}>{playlist?.name ?? ''}</Text>
       <Text style={s.meta}>{meta || t('playlist.kind')}</Text>
       <View style={s.actions}>
-        <IconButton icon="shuffle" size={26} label={t('common.shuffle')} disabled={!tracks.length} onPress={() => playQueue(shuffled(tracks), 0)} />
+        <IconButton icon="shuffle" size={26} label={t('common.shuffle')} disabled={!tracks.length} onPress={() => void playPlaylist(0, true)} />
         <PressableScale
           accessibilityRole="button" accessibilityLabel={t('common.play')}
-          onPress={() => tracks.length && playQueue(tracks, 0)} style={[s.fab, !tracks.length && { opacity: 0.4 }]}
+          onPress={() => tracks.length && void playPlaylist(0)} style={[s.fab, !tracks.length && { opacity: 0.4 }]}
         >
           <Icon name="play" size={30} color={colors.accentText} />
         </PressableScale>
@@ -89,20 +149,22 @@ export default function PlaylistDetail() {
   return (
     <View style={s.root}>
       <FlatList
-        data={tracks}
+        data={displayedTracks}
         keyExtractor={(tr) => tr.id}
         ListHeaderComponent={header}
         contentContainerStyle={{ paddingBottom: layout.listBottomPad }}
         renderItem={({ item, index }) => (
           <TrackRow
             track={item} active={item.id === current?.id}
-            onPress={() => playQueue(tracks, index)}
+            onPress={() => { if (!reordering) void playPlaylist(index); }}
             onMore={reordering ? undefined : () => setMenuTrack(item)}
             trailing={reordering ? (
-              <View style={{ flexDirection: 'row' }}>
-                <IconButton icon="arrow-up" size={20} label={t('playlist.moveUp')} disabled={index === 0} onPress={() => move(index, index - 1)} />
-                <IconButton icon="arrow-down" size={20} label={t('playlist.moveDown')} disabled={index === tracks.length - 1} onPress={() => move(index, index + 1)} />
-              </View>
+              <DragHandle
+                index={index}
+                onStart={dragStartAt}
+                onMove={dragTo}
+                onFinish={finishDrag}
+              />
             ) : undefined}
           />
         )}
@@ -133,6 +195,39 @@ export default function PlaylistDetail() {
   );
 }
 
+function DragHandle({
+  index,
+  onStart,
+  onMove,
+  onFinish,
+}: {
+  index: number;
+  onStart: (index: number) => void;
+  onMove: (start: number, offset: number) => void;
+  onFinish: (cancelled?: boolean) => void;
+}) {
+  const indexRef = useRef(index);
+  const startRef = useRef<number | null>(null);
+  indexRef.current = index;
+  const responder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 4,
+    onPanResponderGrant: () => {
+      startRef.current = indexRef.current;
+      onStart(indexRef.current);
+    },
+    onPanResponderMove: (_, gesture) => {
+      if (startRef.current !== null) onMove(startRef.current, gesture.dy);
+    },
+    onPanResponderRelease: () => onFinish(),
+    onPanResponderTerminate: () => onFinish(true),
+  }), [onFinish, onMove, onStart]);
+  return (
+    <View {...responder.panHandlers} accessibilityRole="button" accessibilityLabel={t('playlist.reorder')} style={s.dragHandle}>
+      <Icon name="reorder-three" size={26} color={colors.textMuted} />
+    </View>
+  );
+}
+
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   topBar: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: spacing.md },
@@ -141,5 +236,6 @@ const s = StyleSheet.create({
   title: { color: colors.text, fontSize: font.xxl, fontWeight: '800', textAlign: 'center', marginTop: spacing.sm },
   meta: { color: colors.textMuted, fontSize: font.md },
   actions: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.sm },
+  dragHandle: { paddingHorizontal: spacing.sm, paddingVertical: spacing.md },
   fab: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', paddingLeft: 4 },
 });

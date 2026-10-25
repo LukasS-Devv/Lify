@@ -90,6 +90,14 @@ test('prevIndex honours repeat all', () => {
   assert.equal(prevIndex({ items, index: 0 }, 'all'), 2);
 });
 
+test('reverse repeat plays toward the start and wraps to the end', () => {
+  assert.equal(nextIndex({ items, index: 2 }, 'reverse', false), 1);
+  assert.equal(nextIndex({ items, index: 0 }, 'reverse', false), 2);
+  assert.equal(nextIndex({ items, index: 1 }, 'reverse', true), 0);
+  assert.equal(prevIndex({ items, index: 1 }, 'reverse'), 2);
+  assert.equal(prevIndex({ items, index: 2 }, 'reverse'), 0);
+});
+
 test('shuffleRest keeps the played head and only permutes the tail', () => {
   const q = shuffleRest({ items, index: 1 }, () => 0);
   assert.deepEqual(q.items.slice(0, 2).map((t) => t.id), ['a', 'b']);
@@ -123,6 +131,13 @@ test('repeat all loops the playlist and skips recommendations', () => {
   assert.equal(nextIndex({ ...q, index: 3 }, 'all', false), 0);
   assert.equal(nextIndex({ ...q, index: 3 }, 'off', false), null);
   assert.equal(prevIndex({ ...q, index: 0 }, 'all'), 2);
+});
+
+test('reverse repeat stays inside the playlist when recommendations are queued', () => {
+  const q = { items: [...items, track('r1')], index: 0, recStart: 3 };
+  assert.equal(nextIndex(q, 'reverse', false), 2);
+  assert.equal(nextIndex({ ...q, index: 3 }, 'reverse', false), 2);
+  assert.equal(prevIndex({ ...q, index: 2 }, 'reverse'), 0);
 });
 
 test('dropRecommended removes only unplayed recommendations', () => {

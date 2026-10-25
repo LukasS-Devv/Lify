@@ -14,13 +14,17 @@ import {
 } from './queue';
 import { usePlayerStore, type PlayerStatus } from './store';
 import { t as tr } from '@/i18n';
+import { isDuplicateQueueEnd, queueEndSignature, type QueueEndSignature } from './queueEndGuard';
 
 const store = () => usePlayerStore.getState();
 let setupDone: Promise<void> | null = null;
-let retriedFor: string | null = null; // faixa que já teve 1 retry automático
-let lastNativeError = '';
+const MAX_AUTOMATIC_RETRIES = 3;
+const RETRY_STABILITY_SECONDS = 10;
+let automaticRetry: { trackId: string; attempts: number; stableAfterPosition: number } | null = null;
+let handledFailureToken: number | null = null;
 let loadToken = 0; // invalida carregamentos antigos quando o usuário pula rápido
-let consecutiveFailures = 0; // falhas seguidas sem nenhuma faixa começar a tocar
+let queueEndTrackId: string | null = null;
+let lastQueueEndEvent: QueueEndSignature | null = null;
 let nativeOperations: Promise<void> = Promise.resolve();
 let sleepTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -37,8 +41,13 @@ function scheduleSleepTimer(endAt: number): void {
     return;
   }
 
+  expireSleepTimer(endAt);
+}
+
+function expireSleepTimer(endAt: number): void {
+  if (store().sleepTimerEndsAt !== endAt || Date.now() < endAt) return;
+  if (sleepTimer) clearTimeout(sleepTimer);
   sleepTimer = null;
-  if (store().sleepTimerEndsAt !== endAt) return;
   store().set({ sleepTimerEndsAt: null });
   const token = ++loadToken;
   void serializeNative(async () => {
@@ -52,6 +61,11 @@ function scheduleSleepTimer(endAt: number): void {
       });
     },
   );
+}
+
+function checkSleepTimer(): void {
+  const endAt = store().sleepTimerEndsAt;
+  if (endAt !== null && Date.now() >= endAt) expireSleepTimer(endAt);
 }
 
 export function setSleepTimer(minutes: number): void {
@@ -76,13 +90,12 @@ export function setupAudio(): Promise<void> {
   if (!setupDone) {
     setupDone = (async () => {
       const settings = await settingsRepo.loadSettings(await getDb());
-      const dataSaver = settings.playbackMode === 'dataSaver';
       try {
         await TrackPlayer.setupPlayer({
           autoHandleInterruptions: true,
           // minBuffer deve ser >= ao buffer de recuperação do ExoPlayer (5s por padrão)
-          minBuffer: dataSaver ? 10 : 30,
-          maxBuffer: dataSaver ? 15 : 30,
+          minBuffer: 10,
+          maxBuffer: 15,
           playBuffer: 3,
           backBuffer: 0,
         });
@@ -90,7 +103,7 @@ export function setupAudio(): Promise<void> {
         // "already initialized" ao recarregar em dev
         if (!(e instanceof Error) || !/already been initialized/i.test(e.message)) throw e;
       }
-      store().set({ repeat: settings.repeatMode, autoQueue: settings.autoQueue });
+      store().set({ repeat: settings.repeatMode });
       await TrackPlayer.updateOptions({
         // Mantém a música e a notificação do player ao fechar o app pelos recentes.
         android: { appKilledPlaybackBehavior: AppKilledPlaybackBehavior.ContinuePlayback },
@@ -135,10 +148,13 @@ export async function restoreNativeQueue(): Promise<void> {
 function nativeToTrack(n: NativeTrack): Track {
   const id = String(n.id ?? '');
   const sep = id.indexOf(':');
+  const source = id.startsWith('local:') ? 'local' : 'youtube';
   return {
     id,
-    source: 'youtube',
-    sourceId: sep >= 0 ? id.slice(sep + 1) : id,
+    source,
+    sourceId: source === 'local' && typeof n.url === 'string'
+      ? n.url
+      : sep >= 0 ? id.slice(sep + 1) : id,
     title: n.title ?? '',
     artist: n.artist ?? '',
     album: n.album ?? null,
@@ -158,11 +174,17 @@ function statusFromNative(state: State): PlayerStatus {
 
 async function loadAndPlay(track: Track, startAt = 0, isRetry = false): Promise<void> {
   const token = ++loadToken;
-  if (!isRetry) retriedFor = null;
+  if (!isRetry || automaticRetry?.trackId !== track.id) {
+    automaticRetry = { trackId: track.id, attempts: 0, stableAfterPosition: startAt + RETRY_STABILITY_SECONDS };
+  } else {
+    automaticRetry.stableAfterPosition = startAt + RETRY_STABILITY_SECONDS;
+  }
   store().set({ status: 'loading', error: null });
   try {
     await setupAudio();
-    const stream = await catalog.getStream(track);
+    const stream = track.source === 'local'
+      ? { url: track.sourceId, mimeType: null }
+      : await catalog.getStream(track);
     if (token !== loadToken) return; // usuário já escolheu outra faixa
 
     await serializeNative(async () => {
@@ -192,23 +214,36 @@ async function loadAndPlay(track: Track, startAt = 0, isRetry = false): Promise<
     }
   } catch (e) {
     if (token !== loadToken) return;
-    await onTrackFailed(e instanceof Error ? e.message : tr('player.error'));
+    await onTrackFailed(track, token, e instanceof Error ? e.message : tr('player.error'), startAt);
   }
 }
 
 /**
- * Pula para a próxima faixa após uma falha (mantém a notificação e a reprodução).
- * Para quando já falharam todas as faixas da fila, evitando loop infinito com repeat "all".
+ * Mantém a faixa atual durante retries; após o limite, pausa e deixa a decisão de
+ * avançar ou tentar novamente com o usuário.
  */
-async function onTrackFailed(message: string): Promise<void> {
-  const { queue, repeat } = store();
-  consecutiveFailures++;
-  const i = consecutiveFailures < queue.items.length ? nextIndex(queue, repeat, true) : null;
-  if (i === null) {
-    store().set({ status: 'error', error: message });
+async function onTrackFailed(track: Track, token: number, message: string, startAt: number): Promise<void> {
+  if (token !== loadToken || currentOf(store().queue)?.id !== track.id || handledFailureToken === token) return;
+  handledFailureToken = token;
+
+  if (automaticRetry?.trackId !== track.id) {
+    automaticRetry = { trackId: track.id, attempts: 0, stableAfterPosition: startAt + RETRY_STABILITY_SECONDS };
+  }
+  if (automaticRetry.attempts < MAX_AUTOMATIC_RETRIES) {
+    automaticRetry.attempts += 1;
+    console.warn(`[player] Retrying ${track.id} (${automaticRetry.attempts}/${MAX_AUTOMATIC_RETRIES})`, message);
+    await loadAndPlay(track, startAt, true);
     return;
   }
-  await skipTo(i);
+
+  try {
+    await serializeNative(() => TrackPlayer.pause());
+  } catch (error) {
+    console.warn('[player] Could not pause after exhausting retries', error);
+  }
+  if (token === loadToken && currentOf(store().queue)?.id === track.id) {
+    store().set({ status: 'error', error: message });
+  }
 }
 
 async function recordHistory(track: Track) {
@@ -229,10 +264,10 @@ function prefetchNext() {
 
 /** Fila automática: ao tocar a última faixa, anexa relacionadas (não com repeat "all", que repete a playlist). */
 async function maybeFillQueue() {
-  const { queue, autoQueue, repeat } = store();
-  if (!autoQueue || repeat === 'all' || queue.index < queue.items.length - 1) return;
+  const { queue, repeat } = store();
+  if (repeat !== 'off') return;
   const cur = currentOf(queue);
-  if (!cur) return;
+  if (!cur || cur.source !== 'youtube') return;
   const related = await catalog.getRelated(cur);
   const now = store().queue;
   if (currentOf(now)?.id !== cur.id) return; // mudou enquanto buscava
@@ -292,6 +327,11 @@ export async function previous(): Promise<void> {
 }
 
 export async function togglePlay(): Promise<void> {
+  const timerEndAt = store().sleepTimerEndsAt;
+  if (timerEndAt !== null && Date.now() >= timerEndAt) {
+    expireSleepTimer(timerEndAt);
+    return;
+  }
   const { status, queue } = store();
   if (status === 'error' || status === 'idle') {
     const t = currentOf(queue);
@@ -362,16 +402,10 @@ export function shuffleUpcoming() {
 
 export async function setRepeat(mode: RepeatMode) {
   store().set({ repeat: mode });
-  if (mode === 'all') store().set({ queue: dropRecommended(store().queue) });
+  if (mode !== 'off') store().set({ queue: dropRecommended(store().queue) });
   prefetchNext();
-  if (mode !== 'all') void maybeFillQueue().catch(() => {}).then(prefetchNext);
+  if (mode === 'off') void maybeFillQueue().catch(() => {}).then(prefetchNext);
   try { await settingsRepo.saveSetting(await getDb(), 'repeatMode', mode); } catch { /* */ }
-}
-
-export async function setAutoQueue(on: boolean) {
-  store().set({ autoQueue: on });
-  try { await settingsRepo.saveSetting(await getDb(), 'autoQueue', on); } catch { /* */ }
-  if (on) void maybeFillQueue().catch(() => {}).then(prefetchNext);
 }
 
 /* ------------------------- eventos do player ------------------------- */
@@ -380,20 +414,28 @@ export async function setAutoQueue(on: boolean) {
  * Fim da faixa nativa. Um evento atrasado (enquanto a próxima faixa ainda carrega, ou de uma
  * faixa já substituída) não pode avançar a fila de novo, senão a faixa seguinte é pulada.
  */
-async function onQueueEnded(): Promise<void> {
+async function onQueueEnded(event: { track: number; position: number }): Promise<void> {
   const cur = currentOf(store().queue);
-  if (!cur || store().status === 'loading') return;
-  const active = await TrackPlayer.getActiveTrack().catch(() => undefined);
-  if (active && String(active.id) !== cur.id) return;
-  await next(false);
+  if (!cur
+    || store().status === 'loading'
+    || queueEndTrackId === cur.id
+    || isDuplicateQueueEnd(event, lastQueueEndEvent, Date.now())) return;
+  queueEndTrackId = cur.id;
+  try {
+    const active = await TrackPlayer.getActiveTrack().catch(() => undefined);
+    if (currentOf(store().queue)?.id !== cur.id || (active && String(active.id) !== cur.id)) return;
+    lastQueueEndEvent = queueEndSignature(event, Date.now());
+    await next(false);
+  } finally {
+    if (queueEndTrackId === cur.id) queueEndTrackId = null;
+  }
 }
 
 /** Registrado pelo playbackService (roda também em background/headless). */
 export function attachPlayerEvents() {
-  TrackPlayer.addEventListener(Event.PlaybackQueueEnded, () => { void onQueueEnded(); });
+  TrackPlayer.addEventListener(Event.PlaybackQueueEnded, (event) => { void onQueueEnded(event); });
 
   TrackPlayer.addEventListener(Event.PlaybackState, ({ state }) => {
-    if (state === State.Playing) consecutiveFailures = 0;
     const cur = store().status;
     if (cur === 'loading' || cur === 'error') {
       if (state === State.Playing) store().set({ status: 'playing' });
@@ -404,24 +446,33 @@ export function attachPlayerEvents() {
     else if (state === State.Buffering || state === State.Loading) store().set({ status: 'buffering' });
   });
 
-  // URL expirada / falha de rede: tenta uma vez re-resolver o stream na mesma posição.
+  TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, async ({ position }) => {
+    checkSleepTimer();
+    const retry = automaticRetry;
+    if (!retry || position < retry.stableAfterPosition || currentOf(store().queue)?.id !== retry.trackId) return;
+    const token = loadToken;
+    const active = await TrackPlayer.getActiveTrack().catch(() => undefined);
+    if (token === loadToken && active && String(active.id) === retry.trackId && automaticRetry === retry) {
+      retry.attempts = 0;
+    }
+  });
+
+  // URL expirada / falha de rede: re-resolve o stream na mesma posição até ao limite.
   TrackPlayer.addEventListener(Event.PlaybackError, async (e) => {
     console.warn('[player] PlaybackError', e.code, e.message);
-    lastNativeError = `${e.message ?? ''} (${e.code ?? '?'})`;
+    const message = tr('player.errorTrack', { detail: `${e.message ?? ''} (${e.code ?? '?'})` });
     const t = currentOf(store().queue);
     if (!t) return;
-    if (retriedFor !== t.id) {
-      retriedFor = t.id;
-      const { position } = await TrackPlayer.getProgress().catch(() => ({ position: 0 }));
-      await loadAndPlay(t, position, true);
-    } else {
-      await onTrackFailed(tr('player.errorTrack', { detail: lastNativeError }));
-    }
+    const token = loadToken;
+    const active = await TrackPlayer.getActiveTrack().catch(() => undefined);
+    if (token !== loadToken || (active && String(active.id) !== t.id)) return;
+    const { position } = await TrackPlayer.getProgress().catch(() => ({ position: 0 }));
+    await onTrackFailed(t, token, message, position);
   });
 
   TrackPlayer.addEventListener(Event.RemoteNext, () => { void next(true); });
   TrackPlayer.addEventListener(Event.RemotePrevious, () => { void previous(); });
-  TrackPlayer.addEventListener(Event.RemotePlay, () => { void play(); });
+  TrackPlayer.addEventListener(Event.RemotePlay, () => { void togglePlay(); });
   TrackPlayer.addEventListener(Event.RemotePause, () => { void pause(); });
   TrackPlayer.addEventListener(Event.RemoteStop, () => { void stop(); });
   TrackPlayer.addEventListener(Event.RemoteSeek, ({ position }) => { void seekTo(position); });

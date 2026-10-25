@@ -132,6 +132,29 @@ export async function addTrackToPlaylist(db: Db, playlistId: number, track: Trac
   return added;
 }
 
+/** Adiciona várias faixas ao final numa única transação, ignorando as já existentes. */
+export async function addTracksToPlaylist(db: Db, playlistId: number, tracks: Track[]): Promise<number> {
+  let added = 0;
+  await db.withTransactionAsync(async () => {
+    const max = await db.getFirstAsync<{ m: number | null }>(
+      'SELECT MAX(position) AS m FROM playlist_tracks WHERE playlist_id = ?', playlistId);
+    let nextPosition = (max?.m ?? -1) + 1;
+    const now = Date.now();
+    for (const track of tracks) {
+      const exists = await db.getFirstAsync<{ id: number }>(
+        'SELECT id FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?', playlistId, track.id);
+      if (exists) continue;
+      await upsertTrack(db, track);
+      await db.runAsync(
+        'INSERT INTO playlist_tracks (playlist_id, track_id, position, added_at) VALUES (?, ?, ?, ?)',
+        playlistId, track.id, nextPosition++, now);
+      added += 1;
+    }
+    if (added) await db.runAsync('UPDATE playlists SET updated_at = ? WHERE id = ?', now, playlistId);
+  });
+  return added;
+}
+
 export async function removeTrackFromPlaylist(db: Db, playlistId: number, trackId: string): Promise<void> {
   await db.withTransactionAsync(async () => {
     await db.runAsync('DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?', playlistId, trackId);

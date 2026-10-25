@@ -614,14 +614,25 @@ test('cancelling the app request destroys the active Innertube block request', a
   assert.equal(requests[0].destroyed, true);
 });
 
-test('a 403 on a later Innertube block drops the cached resolution', async (t) => {
+test('a 403 on a later Innertube block routes the next retry through yt-dlp', async (t) => {
   const future = Math.floor(Date.now() / 1000) + 600;
-  const url = `https://r1---sn.googlevideo.com/videoplayback?signature=block403&expire=${future}`;
+  const innertubeUrl = `https://r1---sn.googlevideo.com/videoplayback?signature=block403&expire=${future}`;
+  const ytdlpUrl = `https://r1---sn.googlevideo.com/videoplayback?signature=ytdlp&expire=${future}`;
   const counter = { calls: 0 };
+  const innertubeRequests = [];
+  const fallbackRequests = [];
   const baseUrl = await startAppServer(t, {
     upstreamChunkBytes: 4,
-    innertubeResolver: innertubeStub(url, counter),
-    requestUpstream: createRangeUpstream(RANGE_DATA.slice(0, 10), [], 4),
+    innertubeResolver: innertubeStub(innertubeUrl, counter),
+    spawnProcess: createSpawnProcess({
+      stdout: JSON.stringify({ url: ytdlpUrl }),
+    }),
+    requestUpstream: (target, options, onResponse) => {
+      if (target.toString() === innertubeUrl) {
+        return createRangeUpstream(RANGE_DATA.slice(0, 10), innertubeRequests, 4)(target, options, onResponse);
+      }
+      return createAudioUpstream(fallbackRequests)(target, options, onResponse);
+    },
     downloaderPath: 'yt-dlp-test',
   });
 
@@ -633,8 +644,10 @@ test('a 403 on a later Innertube block drops the cached resolution', async (t) =
 
   const second = await fetch(`${baseUrl}/stream/abcdefghijk`);
   assert.equal(second.status, 200);
-  await second.arrayBuffer().catch(() => {});
-  assert.equal(counter.calls, 2);
+  assert.equal(await second.text(), 'audio-data');
+  assert.equal(counter.calls, 1);
+  assert.equal(innertubeRequests.length, 2);
+  assert.equal(fallbackRequests.length, 1);
 });
 
 const silentLogger = { log() {}, info() {}, warn() {}, error() {} };

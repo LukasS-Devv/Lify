@@ -5,12 +5,13 @@ import { useHistory } from '@/features/library/useLibrary';
 import { t, useTranslation } from '@/i18n';
 import { playQueue } from '@/services/audio/controller';
 import { layout } from '@/theme/tokens';
+import { uniqueRecentTracks } from '@/utils/recent';
 
 export default function RecentTracksScreen() {
   useTranslation();
   const router = useRouter();
   const { data, loading } = useHistory(500);
-  const tracks = data.map(({ track }) => track);
+  const tracks = uniqueRecentTracks(data);
 
   return (
     <Screen

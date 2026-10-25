@@ -40,6 +40,7 @@ const DEFAULT_OPTIONS = {
   maxCacheEntries: 500,
   maxCacheAgeMs: 45 * 60_000,
   cacheExpirySafetyMs: 30_000,
+  fallbackPreferenceMs: 2 * 60_000,
   upstreamChunkBytes: parseChunkBytes(process.env.UPSTREAM_CHUNK_BYTES),
 };
 
@@ -187,6 +188,7 @@ function createApp({
   const options = { ...DEFAULT_OPTIONS, ...providedOptions };
   const cache = new Map();
   const pendingResolutions = new Map();
+  const ytdlpPreferredUntil = new Map();
   // Ligação keep-alive partilhada pelos blocos ao googlevideo.
   const upstreamAgent = new https.Agent({ keepAlive: true });
   let activeResolvers = 0;
@@ -215,6 +217,18 @@ function createApp({
     cache.set(key, { value, expiresAt: Date.now() + ttl });
     while (cache.size > options.maxCacheEntries) {
       cache.delete(cache.keys().next().value);
+    }
+  }
+
+  function preferYtdlpFor(key) {
+    const now = Date.now();
+    for (const [entryKey, expiresAt] of ytdlpPreferredUntil) {
+      if (expiresAt <= now) ytdlpPreferredUntil.delete(entryKey);
+    }
+    ytdlpPreferredUntil.delete(key);
+    ytdlpPreferredUntil.set(key, now + options.fallbackPreferenceMs);
+    while (ytdlpPreferredUntil.size > options.maxCacheEntries) {
+      ytdlpPreferredUntil.delete(ytdlpPreferredUntil.keys().next().value);
     }
   }
 
@@ -340,8 +354,10 @@ function createApp({
       };
     }
 
+    const preferYtdlp = (ytdlpPreferredUntil.get(key) ?? 0) > Date.now();
+    if (!preferYtdlp) ytdlpPreferredUntil.delete(key);
     activeResolvers += 1;
-    const promise = extractStream(videoId, profile)
+    const promise = (preferYtdlp ? extractWithYtdlp(videoId, profile) : extractStream(videoId, profile))
       .then((result) => {
         cacheResolution(key, result);
         return result;
@@ -517,6 +533,8 @@ function createApp({
             return;
           }
           cache.delete(cacheKey);
+          preferYtdlpFor(cacheKey);
+          logger.warn?.(`[stream] ${videoId} upstream ${status} on a later Innertube block; next request will use yt-dlp`);
           fail(new Error(`Upstream returned ${status} at byte ${from}`), 'upstream');
           return;
         }

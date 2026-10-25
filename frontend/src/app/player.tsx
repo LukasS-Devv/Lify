@@ -17,7 +17,7 @@ import { gradientFor } from '@/utils/color';
 import { formatDuration } from '@/utils/track';
 import { colors, font, radius, shadow, spacing } from '@/theme/tokens';
 
-const REPEAT_NEXT: Record<RepeatMode, RepeatMode> = { off: 'all', all: 'one', one: 'off' };
+const REPEAT_NEXT: Record<RepeatMode, RepeatMode> = { off: 'all', all: 'one', one: 'reverse', reverse: 'off' };
 
 type QueueRow =
   | { kind: 'track'; tr: Track; i: number }
@@ -62,7 +62,7 @@ export default function PlayerScreen() {
   const total = duration || track.durationSec || 0;
   const shown = dragging ?? position;
   const busy = status === 'loading' || status === 'buffering';
-  const repeatingList = repeat === 'all';
+  const repeatingList = repeat === 'all' || repeat === 'reverse';
   const rows: QueueRow[] = [];
   const visibleEnd = repeatingList ? (queue.recStart ?? queue.items.length) : queue.items.length;
   queue.items.slice(0, visibleEnd).forEach((tr, i) => {
@@ -154,6 +154,7 @@ export default function PlayerScreen() {
           <IconButton icon="repeat" size={24} color={repeat === 'off' ? colors.textMuted : colors.accent}
             label={t(`player.repeat.${repeat}`)} onPress={() => void setRepeat(REPEAT_NEXT[repeat])} />
           {repeat === 'one' ? <Text style={s.repeatOne}>1</Text> : null}
+          {repeat === 'reverse' ? <Text style={s.repeatOne}>↶</Text> : null}
         </View>
       </View>
 

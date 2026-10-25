@@ -20,7 +20,7 @@ import { ArtworkImage } from '../ArtworkImage';
 
 const GENRE_COLORS = ['#248fcf', '#7811b3', '#a1727e', '#6eaf78', '#58428b', '#21b47a', '#8158e6', '#db6953'];
 
-const ARTIST_LOOKUP_LIMIT = 4;
+const ARTIST_LOOKUP_LIMIT = 2;
 
 export function Home() {
   useTranslation();
@@ -107,7 +107,7 @@ export function Home() {
         .finally(() => {
           if (active) setArtistsLoading(false);
         });
-    }, 0);
+    }, 400);
 
     return () => {
       active = false;
@@ -143,7 +143,7 @@ export function Home() {
         }
       });
       void Promise.all(lookups);
-    }, 0);
+    }, 500);
 
     return () => {
       current = false;

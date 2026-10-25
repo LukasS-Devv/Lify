@@ -18,8 +18,14 @@ meio de um servidor Node.js separado.
   usando SQLite; esses dados não são enviados ao servidor de áudio.
 - Permite organizar uma fila de reprodução e importar playlists públicas do
   YouTube Music para a biblioteca local.
-- Oferece interface em português e inglês e opções de servidor e perfil de
-  reprodução.
+- Permite importar arquivos de áudio do dispositivo para playlists locais e
+  reproduzi-los sem conexão.
+- Permite exportar/importar backups da biblioteca e agendar cópias locais
+  diárias, semanais ou mensais. O sistema pode atrasar as tarefas em segundo
+  plano; os backups portáteis `.lifybackup` incluem os arquivos de áudio
+  importados e podem ser exportados ou restaurados em outro aparelho.
+- Oferece interface em português e inglês, escolha do servidor de áudio e
+  reprodução fixa no perfil de poupança de dados.
 
 O aplicativo é feito com React Native, Expo e Expo Router. É necessário um
 **development build**: os módulos nativos de reprodução e SQLite não funcionam
@@ -42,8 +48,11 @@ App ── busca e metadados ──> YouTube Music (youtubei.js)
 O endpoint de áudio encaminha pedidos HTTP `Range`, necessários para o player
 procurar diferentes posições da faixa. O servidor não acumula o áudio inteiro
 na memória nem o guarda em cache; mantém em cache, por tempo limitado, apenas
-metadados da resolução e URLs temporárias. Há perfis `standard` e `dataSaver`,
-limites para resoluções simultâneas e timeouts para pedidos. O endpoint
+metadados da resolução e URLs temporárias. O app usa sempre o perfil
+`dataSaver`; a API também mantém o perfil `standard` para compatibilidade com
+outros clientes. Se um bloco tardio do Innertube falhar, a próxima tentativa
+usa yt-dlp por até dois minutos. Há limites para resoluções simultâneas e
+timeouts para pedidos. O endpoint
 `/health` informa se o servidor está ativo.
 
 Rotas:

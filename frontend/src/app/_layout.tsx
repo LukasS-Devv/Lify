@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -11,6 +12,8 @@ import { setLanguage, t, useTranslation } from '@/i18n';
 import { colors } from '@/theme/tokens';
 import { useStartupStore } from '@/services/startup';
 import { isStreamServerConfigured } from '@/services/catalog/server';
+import { ensureAutoBackupScheduled, runAutoBackupIfDue } from '@/storage/backups/autoBackupTask';
+import { cleanupUnreferencedLocalAudio } from '@/storage/localAudioCleanup';
 
 void SplashScreen.preventAutoHideAsync().catch((error: unknown) => {
   console.warn('[startup] Could not keep the native splash visible', error);
@@ -27,6 +30,20 @@ export default function RootLayout() {
   const pathname = usePathname();
 
   useEffect(() => {
+    void ensureAutoBackupScheduled().catch((backupError: unknown) => {
+      console.warn('[backup] Could not register automatic backup', backupError);
+    });
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void runAutoBackupIfDue().catch((backupError: unknown) => {
+          console.error('[backup] Automatic backup on app resume failed', backupError);
+        });
+      }
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
     let alive = true;
     setError(null);
     setReady(false);
@@ -39,9 +56,14 @@ export default function RootLayout() {
         if (alive) {
           setError(null);
           setReady(true);
-          void restoreNativeQueue().catch((audioError: unknown) => {
-            console.warn('[startup] Audio setup failed; it will be retried when playback starts', audioError);
-          });
+          void restoreNativeQueue()
+            .catch((audioError: unknown) => {
+              console.warn('[startup] Audio setup failed; it will be retried when playback starts', audioError);
+            })
+            .then(() => cleanupUnreferencedLocalAudio())
+            .catch((cleanupError: unknown) => {
+              console.warn('[startup] Could not clean up unused local audio files', cleanupError);
+            });
         }
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : t('app.startFailedGeneric'));

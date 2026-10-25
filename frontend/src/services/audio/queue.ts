@@ -67,6 +67,10 @@ export function removeAt(q: QueueState, i: number): QueueState {
 export function nextIndex(q: QueueState, repeat: RepeatMode, manual: boolean): number | null {
   if (q.items.length === 0) return null;
   if (repeat === 'one' && !manual) return q.index;
+  if (repeat === 'reverse') {
+    const limit = q.recStart ?? q.items.length;
+    return q.index > 0 && q.index < limit ? q.index - 1 : limit - 1;
+  }
   if (repeat === 'all') {
     if (q.recStart !== undefined && q.index >= q.recStart) return 0;
     const limit = q.recStart ?? q.items.length;
@@ -77,6 +81,10 @@ export function nextIndex(q: QueueState, repeat: RepeatMode, manual: boolean): n
 
 export function prevIndex(q: QueueState, repeat: RepeatMode): number | null {
   if (q.items.length === 0) return null;
+  if (repeat === 'reverse') {
+    const limit = q.recStart ?? q.items.length;
+    return q.index < limit - 1 ? q.index + 1 : 0;
+  }
   if (q.index > 0) return q.index - 1;
   if (repeat !== 'all') return null;
   return (q.recStart || q.items.length) - 1;

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRecentEntries, interleaveUnique } from '../../src/utils/recent';
+import { buildRecentEntries, interleaveUnique, uniqueRecentTracks } from '../../src/utils/recent';
 import type { HistoryEntry, PlaylistSummary, Track } from '../../src/types';
 
 const track = (id: string): Track => ({
@@ -22,6 +22,15 @@ const playlist = (id: number): PlaylistSummary => ({
   trackCount: 3,
   coverUrl: null,
 } as unknown as PlaylistSummary);
+
+test('uniqueRecentTracks keeps the newest occurrence of each track', () => {
+  const history = [
+    { track: track('a'), playedAt: 300 },
+    { track: track('b'), playedAt: 200 },
+    { track: track('a'), playedAt: 100 },
+  ];
+  assert.deepEqual(uniqueRecentTracks(history).map((item) => item.id), ['a', 'b']);
+});
 
 test('buildRecentEntries collapses repeated plays of the same track', () => {
   const history = [entry('a'), entry('a'), entry('a'), entry('b')];

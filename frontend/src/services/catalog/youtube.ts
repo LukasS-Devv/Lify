@@ -295,7 +295,7 @@ export const youtubeCatalog: CatalogProvider = {
     const settings = await settingsRepo.loadSettings(await getDb());
     const baseUrl = getStreamServerUrl(settings);
     return {
-      url: `${baseUrl}/stream/${encodeURIComponent(track.sourceId)}?profile=${settings.playbackMode}`,
+      url: `${baseUrl}/stream/${encodeURIComponent(track.sourceId)}?profile=dataSaver`,
       mimeType: null,
       expiresAt: null,
     };
@@ -306,7 +306,7 @@ export const youtubeCatalog: CatalogProvider = {
     try {
       const settings = await settingsRepo.loadSettings(await getDb());
       const baseUrl = getStreamServerUrl(settings);
-      await fetch(`${baseUrl}/prefetch/${encodeURIComponent(track.sourceId)}?profile=${settings.playbackMode}`);
+      await fetch(`${baseUrl}/prefetch/${encodeURIComponent(track.sourceId)}?profile=dataSaver`);
     } catch {
       // best-effort: a reprodução resolve a faixa normalmente se falhar
     }

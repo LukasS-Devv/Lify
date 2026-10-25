@@ -7,6 +7,7 @@ import { t, useTranslation } from '@/i18n';
 import { colors, font, radius, spacing } from '@/theme/tokens';
 import { Button } from './Button';
 import { Icon } from './Icon';
+import { cleanupUnreferencedLocalAudio } from '@/storage/localAudioCleanup';
 
 /** Id reservado para a linha "Favoritos" dentro do conjunto de seleção. */
 const FAVORITES = -1;
@@ -69,6 +70,7 @@ export function PlaylistPickerModal({ track, onCancel, onConfirm }: {
         await favoritesRepo.toggleFavorite(db, track);
         bumpFavoritesVersion();
       }
+      await cleanupUnreferencedLocalAudio();
       onConfirm();
     } catch (e) {
       setError(e instanceof Error ? e.message : t('common.error'));
@@ -117,7 +119,7 @@ const s = StyleSheet.create({
   sheet: { marginTop: 'auto', backgroundColor: colors.surfaceAlt, padding: spacing.lg,paddingBottom: spacing.xl*2 ,gap: spacing.md, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl },
   title: { color: colors.text, fontSize: font.xl, fontWeight: '800' },
   hint: { color: colors.textMuted, fontSize: font.md },
-  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 12 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 56, paddingHorizontal: spacing.md, marginBottom: spacing.sm, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md },
   rowText: { flex: 1, color: colors.text, fontSize: font.lg },
   err: { color: colors.danger },
   actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm },

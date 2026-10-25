@@ -3,7 +3,7 @@ import type { Db } from '../types';
 
 export interface TrackRow {
   id: string;
-  source: 'youtube';
+  source: Track['source'];
   source_id: string;
   title: string;
   artist: string;

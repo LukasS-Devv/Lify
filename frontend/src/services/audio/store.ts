@@ -9,7 +9,6 @@ interface PlayerStore {
   status: PlayerStatus;
   error: string | null;
   repeat: RepeatMode;
-  autoQueue: boolean;
   sleepTimerEndsAt: number | null;
   set: (patch: Partial<Omit<PlayerStore, 'set'>>) => void;
 }
@@ -19,7 +18,6 @@ export const usePlayerStore = create<PlayerStore>((set) => ({
   status: 'idle',
   error: null,
   repeat: 'off',
-  autoQueue: true,
   sleepTimerEndsAt: null,
   set: (patch) => set(patch),
 }));

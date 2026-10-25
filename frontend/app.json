@@ -28,6 +28,7 @@
     "plugins": [
       "expo-router",
       "expo-sqlite",
+      "expo-background-task",
       ["expo-build-properties", { "android": { "usesCleartextTraffic": true } }],
       [
         "expo-splash-screen",

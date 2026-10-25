@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Alert } from 'react-native';
 import { getDb, historyRepo, settingsRepo } from '@/database';
 import { exportBackup, importBackup } from '@/storage/backups/backup';
-import { setAutoQueue } from '@/services/audio/controller';
+import { configureAutoBackup } from '@/storage/backups/autoBackupTask';
+import { cleanupUnreferencedLocalAudio } from '@/storage/localAudioCleanup';
 import { isStreamServerConfigured, normalizeStreamServerUrl } from '@/services/catalog/server';
 import { useStartupStore } from '@/services/startup';
 import { DEFAULT_SETTINGS, type AppSettings } from '@/types';
@@ -29,8 +30,11 @@ export function useSettings() {
   const update = useCallback(async <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     setMessage(null);
     try {
-      if (key === 'autoQueue') await setAutoQueue(value as boolean);
-      else await settingsRepo.saveSetting(await getDb(), key, value);
+      if (key === 'autoBackupIntervalDays') {
+        if (typeof value !== 'number') throw new TypeError('Automatic backup interval must be numeric');
+        await configureAutoBackup(value);
+      }
+      await settingsRepo.saveSetting(await getDb(), key, value);
       if (key === 'language') setLanguage(value as AppSettings['language']);
       setSettings((s) => ({ ...s, [key]: value }));
       return true;
@@ -92,7 +96,9 @@ export function useSettings() {
         { text: t('settings.importPick'), style: 'destructive', onPress: () => guarded(async () => {
           const r = await importBackup();
           if (r.status === 'cancelled') return t('settings.importCancelled');
+          await cleanupUnreferencedLocalAudio();
           const s = await settingsRepo.loadSettings(await getDb());
+          await configureAutoBackup(s.autoBackupIntervalDays);
           setSettings(s);
           setLanguage(s.language);
           useStartupStore.getState().setStreamServerConfigured(isStreamServerConfigured(s));

@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { getDb, playlistsRepo } from '@/database';
 import { useFocusLoad } from '@/utils/useFocusLoad';
 import type { PlaylistSummary, Track } from '@/types';
+import { cleanupUnreferencedLocalAudio } from '@/storage/localAudioCleanup';
 
 export function usePlaylists() {
   const state = useFocusLoad<PlaylistSummary[]>(async () => playlistsRepo.listPlaylists(await getDb()), []);
@@ -33,13 +34,17 @@ export function usePlaylistDetail(id: number) {
     await playlistsRepo.renamePlaylist(await getDb(), id, name);
     await state.reload();
   }, [id, state.reload]);
-  const remove = useCallback(async () => playlistsRepo.deletePlaylist(await getDb(), id), [id]);
+  const remove = useCallback(async () => {
+    await playlistsRepo.deletePlaylist(await getDb(), id);
+    await cleanupUnreferencedLocalAudio();
+  }, [id]);
   const setPinned = useCallback(async (pinned: boolean) => {
     await playlistsRepo.setPlaylistPinned(await getDb(), id, pinned);
     await state.reload();
   }, [id, state.reload]);
   const removeTrack = useCallback(async (t: Track) => {
     await playlistsRepo.removeTrackFromPlaylist(await getDb(), id, t.id);
+    await cleanupUnreferencedLocalAudio();
     await state.reload();
   }, [id, state.reload]);
   const move = useCallback(async (from: number, to: number) => {

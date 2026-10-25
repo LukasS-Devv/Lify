@@ -2,7 +2,8 @@
 
 Backend Node.js independente para resolver e encaminhar áudio do YouTube. O
 serviço oferece `GET /health` para monitoramento e
-`GET /stream/:videoId?profile=standard` (também aceita `dataSaver`) para o app.
+`GET /stream/:videoId?profile=dataSaver` como perfil usado pelo app; também
+aceita `standard` para compatibilidade com outros clientes.
 
 ## Resolvedores
 
@@ -36,8 +37,9 @@ serviço oferece `GET /health` para monitoramento e
   como ausentes.
 - Se o primeiro bloco devolver `403`/`410`, o cache da faixa é apagado e a
   resolução é repetida uma vez pelo yt-dlp. Se um bloco posterior devolver
-  `403`/`410`, o cache é apagado, a resposta é encerrada e o caso fica no log; o
-  app repete o pedido a partir da posição atual.
+  `403`/`410`, o cache é apagado, a resposta é encerrada e a próxima tentativa
+  da mesma faixa usa yt-dlp durante até dois minutos. O app repete o pedido a
+  partir da posição atual.
 - Os logs `[stream]` incluem `chunks` (blocos pedidos) e `chunkBytes`. URLs do
   yt-dlp não usam blocos.
 
@@ -81,9 +83,8 @@ Também é possível criar um Web Service manualmente com:
 - **Health Check Path:** `/health`
 - **Runtime:** Node
 
-O app não aponta para uma instância mantida por este projeto. Se hospedar uma
-cópia própria do backend, informe seu endereço HTTPS em **Ajustes → Servidor de
-áudio** no app.
+O app usa sempre o perfil `dataSaver`. Se hospedar uma cópia própria do backend,
+informe seu endereço HTTPS em **Ajustes → Servidor de áudio** no app.
 
 ## Testes
 

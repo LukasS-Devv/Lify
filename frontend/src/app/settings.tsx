@@ -31,12 +31,7 @@ export default function Settings() {
       </Section>
 
       <Section title={t('settings.playback')}>
-        <Text style={s.label}>{t('settings.playbackMode')}</Text>
-        <RadioRow label={t('settings.playbackDataSaver')} selected={settings.playbackMode === 'dataSaver'} onPress={() => update('playbackMode', 'dataSaver')} />
-        <RadioRow label={t('settings.playbackStandard')} selected={settings.playbackMode === 'standard'} onPress={() => update('playbackMode', 'standard')} />
-        <Text style={s.hint}>{t('settings.playbackModeHint')}</Text>
-        <ToggleRow icon="infinite" label={t('settings.autoQueue')} hint={t('settings.autoQueueHint')}
-          value={settings.autoQueue} onChange={(v) => update('autoQueue', v)} />
+        <Text style={s.hint}>{t('settings.dataSaverEnabled')}</Text>
         <ToggleRow icon="time-outline" label={t('settings.history')} hint={t('settings.historyHint')}
           value={settings.historyEnabled} onChange={(v) => update('historyEnabled', v)} />
       </Section>
@@ -66,6 +61,20 @@ export default function Settings() {
       </Section>
 
       <Section title={t('settings.backup')} hint={t('settings.backupHint')}>
+        <Text style={s.label}>{t('settings.autoBackupInterval')}</Text>
+        {([0, 1, 7, 30] as const).map((days) => (
+          <RadioRow
+            key={days}
+            label={t(`settings.autoBackupInterval.${days}`)}
+            selected={settings.autoBackupIntervalDays === days}
+            onPress={() => void update('autoBackupIntervalDays', days)}
+          />
+        ))}
+        {settings.lastAutoBackupAt ? (
+          <Text style={s.hint}>{t('settings.lastAutoBackup', {
+            date: new Date(settings.lastAutoBackupAt).toLocaleString(),
+          })}</Text>
+        ) : null}
         <Button icon="share-outline" label={t('settings.export')} onPress={doExport} disabled={busy} />
         <Button icon="download-outline" variant="secondary" label={t('settings.import')} onPress={doImport} disabled={busy} />
       </Section>
