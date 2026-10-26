@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, FlatList, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, FlatList, LayoutAnimation, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -50,6 +50,7 @@ export default function PlaylistDetail() {
   const [renameError, setRenameError] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
   const [draggedTracks, setDraggedTracks] = useState<Track[] | null>(null);
+  const [draggingTrackId, setDraggingTrackId] = useState<string | null>(null);
   const [downloadRows, setDownloadRows] = useState<PlaylistDownloadRow[]>([]);
   const [downloadQueueRunning, setDownloadQueueRunning] = useState(false);
   const activeDownload = useRef<TrackDownloadTask | null>(null);
@@ -63,20 +64,25 @@ export default function PlaylistDetail() {
   };
   const dragStart = useRef<number | null>(null);
   const dragTarget = useRef<number | null>(null);
+  const dragOffset = useRef(new Animated.Value(0)).current;
   const tracksRef = useRef(tracks);
   tracksRef.current = tracks;
   const displayedTracks = draggedTracks ?? tracks;
   const dragStartAt = useCallback((index: number) => {
     dragStart.current = index;
     dragTarget.current = index;
+    dragOffset.setValue(0);
+    setDraggingTrackId(tracksRef.current[index]?.id ?? null);
     setDraggedTracks(tracksRef.current);
-  }, []);
+  }, [dragOffset]);
   const dragTo = useCallback((start: number, offset: number) => {
     const target = Math.max(0, Math.min(tracksRef.current.length - 1, start + Math.round(offset / 68)));
+    dragOffset.setValue(offset - (target - start) * 68);
     if (target === dragTarget.current) return;
     dragTarget.current = target;
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.spring);
     setDraggedTracks(moveItem(tracksRef.current, start, target));
-  }, []);
+  }, [dragOffset]);
   const finishDrag = useCallback((cancelled = false) => {
     const from = dragStart.current;
     const to = dragTarget.current;
@@ -87,11 +93,17 @@ export default function PlaylistDetail() {
         .catch((error: unknown) => {
           Alert.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
         })
-        .finally(() => setDraggedTracks(null));
+        .finally(() => {
+          setDraggedTracks(null);
+          setDraggingTrackId(null);
+          dragOffset.setValue(0);
+        });
     } else {
       setDraggedTracks(null);
+      setDraggingTrackId(null);
+      dragOffset.setValue(0);
     }
-  }, [move]);
+  }, [dragOffset, move]);
   useEffect(() => {
     screenMounted.current = true;
     return () => {
@@ -124,7 +136,6 @@ export default function PlaylistDetail() {
       label: playlist.pinned ? t('playlist.unpin') : t('playlist.pin'),
       onPress: () => void setPinned(!playlist.pinned),
     }] : []),
-    { icon: 'swap-vertical', label: reordering ? t('playlist.doneReordering') : t('playlist.reorder'), onPress: () => setReordering((r) => !r) },
     ...(tracks.length ? [{ icon: 'list-outline' as const, label: t('playlist.addToQueue'), onPress: () => addToQueueEnd(tracks) }] : []),
     ...(downloadQueueRunning
       ? [{
@@ -287,6 +298,15 @@ export default function PlaylistDetail() {
           >
             <Icon name="play" size={30} color={colors.accentText} />
           </PressableScale>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={reordering ? t('playlist.doneReordering') : t('playlist.reorder')}
+            hitSlop={10}
+            onPress={() => setReordering((value) => !value)}
+            style={({ pressed }) => [s.editButton, pressed && { opacity: 0.6 }]}
+          >
+            <Icon name={reordering ? 'checkmark' : 'pencil-outline'} size={20} color={colors.text} />
+          </Pressable>
         </View>
       </LinearGradient>
       {downloadRows.length > 0 ? (
@@ -344,19 +364,24 @@ export default function PlaylistDetail() {
         ListHeaderComponent={header}
         contentContainerStyle={{ paddingBottom: layout.listBottomPad }}
         renderItem={({ item, index }) => (
-          <TrackRow
-            track={item} active={item.id === current?.id}
-            onPress={() => { if (!reordering) void playPlaylist(index); }}
-            onMore={reordering ? undefined : () => setMenuTrack(item)}
-            trailing={reordering ? (
-              <DragHandle
-                index={index}
-                onStart={dragStartAt}
-                onMove={dragTo}
-                onFinish={finishDrag}
-              />
-            ) : undefined}
-          />
+          <Animated.View style={[
+            item.id === draggingTrackId && s.draggingRow,
+            item.id === draggingTrackId && { transform: [{ translateY: dragOffset }] },
+          ]}>
+            <TrackRow
+              track={item} active={item.id === current?.id}
+              onPress={() => { if (!reordering) void playPlaylist(index); }}
+              onMore={reordering ? undefined : () => setMenuTrack(item)}
+              trailing={reordering ? (
+                <DragHandle
+                  index={index}
+                  onStart={dragStartAt}
+                  onMove={dragTo}
+                  onFinish={finishDrag}
+                />
+              ) : undefined}
+            />
+          </Animated.View>
         )}
         ListEmptyComponent={
           loading ? <TrackRowSkeleton count={4} />
@@ -400,7 +425,10 @@ function DragHandle({
   const startRef = useRef<number | null>(null);
   indexRef.current = index;
   const responder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponderCapture: () => true,
+    onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 4,
+    onPanResponderTerminationRequest: () => false,
     onPanResponderGrant: () => {
       startRef.current = indexRef.current;
       onStart(indexRef.current);
@@ -426,7 +454,12 @@ const s = StyleSheet.create({
   title: { color: colors.text, fontSize: font.xxl, fontWeight: '800', textAlign: 'center', marginTop: spacing.sm },
   meta: { color: colors.textMuted, fontSize: font.md },
   actions: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.sm },
+  editButton: { padding: 2, transform: [{ translateY: 8 }] },
   dragHandle: { paddingHorizontal: spacing.sm, paddingVertical: spacing.md },
+  draggingRow: {
+    elevation: 8,
+    zIndex: 1,
+  },
   downloadPanel: { marginHorizontal: spacing.md, marginBottom: spacing.md, padding: spacing.md, borderRadius: 12, backgroundColor: colors.surfaceAlt, gap: spacing.sm },
   downloadHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
   downloadSummary: { color: colors.text, fontSize: font.sm, flex: 1 },

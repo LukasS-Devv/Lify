@@ -1,8 +1,8 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { Directory, File, Paths } from 'expo-file-system';
 import type { Track } from '@/types';
-import { catalog } from '@/services/catalog';
-import { downloadsRepo, getDb, tracksRepo } from '@/database';
+import { downloadsRepo, getDb, settingsRepo, tracksRepo } from '@/database';
+import { getStreamServerUrl } from '@/services/catalog/server';
 import { t } from '@/i18n';
 
 const DOWNLOADS_DIRECTORY = 'downloads';
@@ -111,13 +111,14 @@ async function performDownload(
     return { localPath: state.localPath, alreadyDownloaded: true };
   }
 
-  const stream = await catalog.getStream(track);
+  const settings = await settingsRepo.loadSettings(await getDb());
+  const downloadUrl = `${getStreamServerUrl(settings)}/download/${encodeURIComponent(track.sourceId)}?profile=dataSaver`;
   if (isCancelled()) throw new DownloadCancelledError();
 
   const dir = ensureDownloadsDirectory();
   const temporaryFile = new File(dir, uniqueName(track.id, '.tmp'));
   const downloadTask = FileSystem.createDownloadResumable(
-    stream.url,
+    downloadUrl,
     temporaryFile.uri,
     undefined,
     ({ totalBytesExpectedToWrite, totalBytesWritten }) => {

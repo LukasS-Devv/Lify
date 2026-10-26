@@ -76,6 +76,7 @@ export function nextIndex(q: QueueState, repeat: RepeatMode, manual: boolean): n
     const limit = q.recStart ?? q.items.length;
     return q.index + 1 < limit ? q.index + 1 : 0;
   }
+  if (repeat === 'one' && manual && q.index === q.items.length - 1) return q.index;
   return q.index + 1 < q.items.length ? q.index + 1 : null;
 }
 

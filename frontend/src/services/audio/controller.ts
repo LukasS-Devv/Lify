@@ -206,7 +206,7 @@ async function loadAndPlay(track: Track, startAt = 0, isRetry = false): Promise<
         title: track.title,
         artist: track.artist || undefined,
         album: track.album ?? undefined,
-        artwork: track.artworkUrl,
+        ...(track.artworkUrl.trim() ? { artwork: track.artworkUrl.trim() } : {}),
         duration: track.durationSec ?? undefined,
       });
       if (token !== loadToken) return;
@@ -507,6 +507,26 @@ async function onQueueEnded(event: { track: number; position: number }): Promise
     const active = await TrackPlayer.getActiveTrack().catch(() => undefined);
     if (currentOf(store().queue)?.id !== cur.id || (active && String(active.id) !== cur.id)) return;
     lastQueueEndEvent = queueEndSignature(event, Date.now());
+    if (store().repeat === 'one') {
+      try {
+        await serializeNative(async () => {
+          if (currentOf(store().queue)?.id !== cur.id || store().repeat !== 'one') return;
+          await TrackPlayer.seekTo(0);
+          await TrackPlayer.play();
+        });
+        if (currentOf(store().queue)?.id === cur.id && store().repeat === 'one') {
+          store().set({ status: 'playing', error: null });
+        }
+      } catch (error) {
+        if (currentOf(store().queue)?.id === cur.id) {
+          store().set({
+            status: 'error',
+            error: error instanceof Error ? error.message : tr('player.error'),
+          });
+        }
+      }
+      return;
+    }
     if (shouldFetchRecommendations(store().queue, store().repeat)) {
       await maybeFillQueue().catch(() => {});
       if (currentOf(store().queue)?.id !== cur.id) return;

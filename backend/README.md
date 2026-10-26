@@ -3,7 +3,8 @@
 Backend Node.js independente para resolver e encaminhar áudio do YouTube. O
 serviço oferece `GET /health` para monitoramento e
 `GET /stream/:videoId?profile=dataSaver` como perfil usado pelo app; também
-aceita `standard` para compatibilidade com outros clientes.
+aceita `standard` para compatibilidade com outros clientes. Downloads explícitos
+usam `GET /download/:videoId?profile=dataSaver`.
 
 ## Resolvedores
 
@@ -17,6 +18,10 @@ aceita `standard` para compatibilidade com outros clientes.
     ~6 horas ou após 3 falhas seguidas.
 - **yt-dlp (fallback):** usado quando o Innertube falha. Continua disponível com
   o mesmo comportamento de antes.
+- **Downloads diretos:** `/download/:videoId` usa sempre yt-dlp para baixar o
+  áudio completo para um temporário no servidor. Só envia o arquivo ao app após
+  o yt-dlp concluir com sucesso e o arquivo ser validado. Isso não altera o
+  resolvedor principal de `/stream`.
 - **Desligar o Innertube:** defina `YT_RESOLVER=ytdlp` para usar apenas o yt-dlp.
 - Os logs `[stream]` indicam o resolvedor usado no campo `resolver`
   (`innertube` ou `ytdlp`).

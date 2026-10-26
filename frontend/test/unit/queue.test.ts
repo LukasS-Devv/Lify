@@ -82,6 +82,8 @@ test('nextIndex honours repeat modes', () => {
   assert.equal(nextIndex({ items, index: 1 }, 'one', false), 1);
   // "próxima" manual ignora repeat one
   assert.equal(nextIndex({ items, index: 1 }, 'one', true), 2);
+  assert.equal(nextIndex({ items, index: 2 }, 'one', true), 2);
+  assert.equal(nextIndex({ items: [track('solo')], index: 0 }, 'one', true), 0);
   assert.equal(nextIndex(emptyQueue, 'all', true), null);
 });
 

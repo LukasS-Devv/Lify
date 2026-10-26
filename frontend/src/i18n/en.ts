@@ -2,6 +2,8 @@ import type { Dictionary } from './pt';
 
 export const en: Dictionary = {
   'common.cancel': 'Cancel',
+  'common.no': 'No',
+  'common.yes': 'Yes',
   'common.close': 'Close',
   'common.delete': 'Delete',
   'common.rename': 'Rename',
@@ -168,6 +170,8 @@ export const en: Dictionary = {
   'downloads.fileMissing': 'The downloaded file is missing or invalid.',
   'downloads.fileInvalid': 'The downloaded file could not be played.',
   'downloads.fileMissingTitle': 'Download unavailable',
+  'downloads.removeConfirmTitle': 'Remove download?',
+  'downloads.removeConfirmMessage': 'Do you really want to delete this download from the device?',
   'downloads.removeRecord': 'Remove record',
   'downloads.retry': 'Download again',
   'downloads.invalid': 'The download record exists, but the local file is missing or invalid.',

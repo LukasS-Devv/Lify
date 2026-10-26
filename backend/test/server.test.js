@@ -1,7 +1,9 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const { EventEmitter } = require('node:events');
+const path = require('node:path');
 const { PassThrough } = require('node:stream');
 const test = require('node:test');
 const { app, createApp } = require('../index');
@@ -32,6 +34,78 @@ test('stream endpoint rejects unsupported playback profiles', async (t) => {
   const response = await fetch(`${baseUrl}/stream/abcdefghijk?profile=unsupported`);
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { error: 'invalid_playback_profile' });
+});
+
+test('direct download uses yt-dlp while stream keeps the Innertube resolver', async (t) => {
+  let downloadArgs;
+  let innertubeCalls = 0;
+  let temporaryOutputDirectory;
+  const spawnProcess = (_path, args) => {
+    downloadArgs = args;
+    const process = new EventEmitter();
+    process.exitCode = null;
+    process.signalCode = null;
+    process.stderr = new PassThrough();
+    process.kill = () => true;
+    const outputTemplate = args[args.indexOf('--output') + 1];
+    temporaryOutputDirectory = path.dirname(outputTemplate);
+    const outputPath = outputTemplate.replace('%(id)s.%(ext)s', 'abcdefghijk.m4a');
+
+    setImmediate(() => {
+      fs.writeFileSync(outputPath, 'downloaded-audio');
+      process.stderr.end();
+      process.exitCode = 0;
+      process.emit('close', 0);
+    });
+    return process;
+  };
+  const innertubeResolver = async () => {
+    innertubeCalls += 1;
+    return {
+      url: 'https://r1---sn.googlevideo.com/videoplayback?signature=stream',
+      httpHeaders: {},
+      resolveMs: 1,
+      resolver: 'innertube',
+    };
+  };
+  const requestUpstream = (_url, _options, onResponse) => {
+    const request = new EventEmitter();
+    request.end = () => setImmediate(() => {
+      const response = new PassThrough();
+      response.statusCode = 200;
+      response.headers = { 'content-type': 'audio/mp4' };
+      onResponse(response);
+      response.end('stream-audio');
+    });
+    request.destroy = () => {};
+    return request;
+  };
+  const baseUrl = await startAppServer(t, {
+    spawnProcess,
+    requestUpstream,
+    downloaderPath: 'yt-dlp-test',
+    innertubeResolver,
+  });
+
+  const download = await fetch(`${baseUrl}/download/abcdefghijk?profile=dataSaver`);
+  assert.equal(download.status, 200);
+  assert.equal(download.headers.get('content-type'), 'audio/mp4');
+  assert.match(download.headers.get('content-disposition'), /attachment; filename="abcdefghijk\.m4a"/);
+  assert.equal(await download.text(), 'downloaded-audio');
+  assert.ok(downloadArgs.includes('--format'));
+  assert.equal(downloadArgs[downloadArgs.indexOf('--format') + 1], 'bestaudio[abr<=64]/bestaudio[abr<=96]/worstaudio');
+  assert.equal(downloadArgs[downloadArgs.indexOf('--output') + 1], path.join(temporaryOutputDirectory, '%(id)s.%(ext)s'));
+  assert.ok(downloadArgs.includes('--no-part'));
+  assert.equal(innertubeCalls, 0);
+  for (let attempt = 0; attempt < 100 && fs.existsSync(temporaryOutputDirectory); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(fs.existsSync(temporaryOutputDirectory), false);
+
+  const stream = await fetch(`${baseUrl}/stream/abcdefghijk`);
+  assert.equal(stream.status, 200);
+  assert.equal(await stream.text(), 'stream-audio');
+  assert.equal(innertubeCalls, 1);
 });
 
 test('Spotify import endpoint is no longer available', async (t) => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { PlaylistSummary, Track } from '@/types';
 import { favoritesRepo, getDb, playlistsRepo } from '@/database';
 import {
@@ -69,14 +69,26 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
     }
   };
 
+  const confirmRemoveDownload = () => {
+    if (downloadBusy) return;
+    Alert.alert(t('downloads.removeConfirmTitle'), t('downloads.removeConfirmMessage'), [
+      { text: t('common.no'), style: 'cancel' },
+      {
+        text: t('common.yes'),
+        style: 'destructive',
+        onPress: () => void run(async () => {
+          await removeTrackDownload(track.id);
+          setDownloadState('none');
+          return t('actions.downloadRemoved');
+        }),
+      },
+    ]);
+  };
+
   const downloadOrRemove = async () => {
     if (downloadBusy) return;
     if (downloadState === 'available') {
-      await run(async () => {
-        await removeTrackDownload(track.id);
-        setDownloadState('none');
-        return t('actions.downloadRemoved');
-      });
+      confirmRemoveDownload();
       return;
     }
 
@@ -98,12 +110,6 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
       setDownloadProgress(null);
     }
   };
-
-  const removeInvalidDownloadRecord = () => run(async () => {
-    await removeTrackDownload(track.id);
-    setDownloadState('none');
-    return t('actions.downloadRemoved');
-  });
 
   return (
     <Modal transparent animationType="fade" visible onRequestClose={onClose}>
@@ -166,7 +172,7 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
             ) : null}
             {track.source === 'youtube' && downloadState === 'invalid' && !downloadBusy ? (
               <Item icon="trash-outline" showIcon={showIcons} label={t('downloads.removeRecord')} danger
-                onPress={() => void removeInvalidDownloadRecord()} />
+                onPress={confirmRemoveDownload} />
             ) : null}
             {onSleepTimer ? <Item icon="timer-outline" showIcon={showIcons} label={t('player.sleepTimer.open')} onPress={onSleepTimer} /> : null}
             {onRemoveFromPlaylist ? (

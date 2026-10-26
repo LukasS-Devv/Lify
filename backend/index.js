@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const https = require('node:https');
 const os = require('node:os');
 const path = require('node:path');
+const { pipeline } = require('node:stream/promises');
 const express = require('express');
 const ytdlp = require('youtube-dl-exec');
 const { Innertube, Constants } = require('youtubei.js');
@@ -34,6 +35,7 @@ function parseChunkBytes(value) {
 
 const DEFAULT_OPTIONS = {
   extractorTimeoutMs: 45_000,
+  downloadTimeoutMs: 15 * 60_000,
   upstreamTimeoutMs: 30_000,
   upstreamInactivityTimeoutMs: 30_000,
   maxConcurrentResolvers: 4,
@@ -381,6 +383,203 @@ function createApp({
 
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
+  });
+
+  app.get('/download/:videoId', (req, res) => {
+    const { videoId } = req.params;
+    if (!VIDEO_ID_PATTERN.test(videoId)) {
+      res.status(400).json({ error: 'invalid_video_id' });
+      return;
+    }
+    const profile = req.query.profile ?? 'standard';
+    if (typeof profile !== 'string' || !Object.hasOwn(AUDIO_FORMATS, profile)) {
+      res.status(400).json({ error: 'invalid_playback_profile' });
+      return;
+    }
+    if (activeResolvers >= options.maxConcurrentResolvers) {
+      res.setHeader('Retry-After', '2');
+      res.status(503).json({ error: 'server_busy' });
+      return;
+    }
+
+    activeResolvers += 1;
+    const startedAt = Date.now();
+    let extractor;
+    let timeout;
+    let forceKillTimer;
+    let temporaryDirectory;
+    let extractorLog = '';
+    let processFinished = false;
+    let downloadTimedOut = false;
+    let spawnError = null;
+    let clientDisconnected = false;
+    let logged = false;
+    let responseStatus = 502;
+
+    const logRequest = (event, extra = {}) => {
+      if (logged) return;
+      logged = true;
+      logger.info(`[download] ${JSON.stringify({
+        event,
+        videoId,
+        profile,
+        resolver: 'ytdlp',
+        totalMs: Date.now() - startedAt,
+        status: responseStatus,
+        ...extra,
+      })}`);
+    };
+
+    const terminateExtractor = () => {
+      if (!extractor || processFinished || extractor.exitCode !== null || extractor.signalCode !== null) return;
+      extractor.kill('SIGTERM');
+      forceKillTimer = setTimeout(() => {
+        if (!processFinished && extractor.exitCode === null && extractor.signalCode === null) {
+          extractor.kill('SIGKILL');
+        }
+      }, 2_000);
+    };
+
+    req.once('aborted', () => {
+      clientDisconnected = true;
+      terminateExtractor();
+    });
+    res.once('close', () => {
+      if (!res.writableEnded) {
+        clientDisconnected = true;
+        terminateExtractor();
+      }
+    });
+
+    const cleanupTemporaryDirectory = async () => {
+      if (!temporaryDirectory) return;
+      try {
+        await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
+      } catch (error) {
+        logger.warn?.('[download] Could not remove temporary download data', error);
+      }
+    };
+
+    const fail = (error) => {
+      if (clientDisconnected || res.writableEnded || res.destroyed) return;
+      responseStatus = error.statusCode || 502;
+      logger.error(`[download] ${videoId} failed`, {
+        message: error instanceof Error ? error.message : String(error),
+        stderr: error.stderr ?? extractorLog.slice(-MAX_LOG_LENGTH),
+      });
+      if (!res.headersSent) {
+        res.status(responseStatus).json({
+          error: responseStatus === 503 ? 'server_busy' : responseStatus === 504 ? 'download_timeout' : 'download_unavailable',
+        });
+      } else {
+        res.destroy(error instanceof Error ? error : undefined);
+      }
+      logRequest('failed');
+    };
+
+    void (async () => {
+      try {
+        temporaryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lify-download-'));
+        if (clientDisconnected) return;
+        const outputTemplate = path.join(temporaryDirectory, '%(id)s.%(ext)s');
+        const sourceUrl = `https://music.youtube.com/watch?v=${videoId}`;
+        extractor = spawnProcess(downloaderPath, [
+          '--format', AUDIO_FORMATS[profile],
+          '--output', outputTemplate,
+          '--no-part',
+          '--no-continue',
+          '--no-playlist',
+          '--quiet',
+          '--no-warnings',
+          '--no-progress',
+          ...(playerClients ? ['--extractor-args', `youtube:player_client=${playerClients}`] : []),
+          ...(jsRuntime ? ['--js-runtimes', jsRuntime, '--remote-components', 'ejs:github'] : []),
+          ...(cookiesPath ? ['--cookies', cookiesPath] : []),
+          '--',
+          sourceUrl,
+        ], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+
+        const downloadFinished = new Promise((resolve, reject) => {
+          extractor.stderr.on('data', (chunk) => {
+            extractorLog = `${extractorLog}${chunk}`.slice(-MAX_LOG_LENGTH);
+          });
+          extractor.once('error', (error) => { spawnError = error; });
+          extractor.once('close', (code) => {
+            processFinished = true;
+            clearTimeout(timeout);
+            clearTimeout(forceKillTimer);
+            if (clientDisconnected) {
+              resolve(false);
+              return;
+            }
+            if (downloadTimedOut) {
+              reject(new StreamError('yt-dlp download timed out', 504));
+              return;
+            }
+            if (spawnError) {
+              reject(spawnError);
+              return;
+            }
+            if (code !== 0) {
+              const error = new Error(`yt-dlp download exited with code ${code}`);
+              error.stderr = extractorLog;
+              reject(error);
+              return;
+            }
+            resolve(true);
+          });
+          timeout = setTimeout(() => {
+            if (processFinished) return;
+            downloadTimedOut = true;
+            terminateExtractor();
+          }, options.downloadTimeoutMs);
+        });
+
+        const succeeded = await downloadFinished;
+        clearTimeout(timeout);
+        clearTimeout(forceKillTimer);
+        if (!succeeded || clientDisconnected) return;
+
+        const entries = await fs.promises.readdir(temporaryDirectory, { withFileTypes: true });
+        const outputFiles = entries.filter((entry) => entry.isFile() && entry.name.startsWith(`${videoId}.`));
+        if (outputFiles.length !== 1) {
+          throw new Error('yt-dlp did not produce exactly one audio file');
+        }
+        const outputPath = path.join(temporaryDirectory, outputFiles[0].name);
+        const stat = await fs.promises.stat(outputPath);
+        if (!stat.isFile() || stat.size <= 0) throw new Error('yt-dlp produced an empty audio file');
+
+        const extension = path.extname(outputFiles[0].name).toLowerCase();
+        const mimeTypes = {
+          '.m4a': 'audio/mp4',
+          '.mp4': 'audio/mp4',
+          '.webm': 'audio/webm',
+          '.opus': 'audio/opus',
+          '.ogg': 'audio/ogg',
+          '.mp3': 'audio/mpeg',
+        };
+        const contentType = mimeTypes[extension] || 'application/octet-stream';
+        const filename = `${videoId}${extension}`;
+        responseStatus = 200;
+        res.status(200);
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Length', stat.size);
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Cache-Control', 'no-store, no-transform');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        await pipeline(fs.createReadStream(outputPath), res);
+        logRequest('complete', { bytes: stat.size });
+      } catch (error) {
+        clearTimeout(timeout);
+        clearTimeout(forceKillTimer);
+        fail(error);
+      } finally {
+        clearTimeout(timeout);
+        clearTimeout(forceKillTimer);
+        await cleanupTemporaryDirectory();
+        activeResolvers -= 1;
+      }
+    })();
   });
 
   app.get('/stream/:videoId', (req, res) => {

@@ -9,6 +9,8 @@
 export const pt = {
   // ───────── comum
   'common.cancel': 'Cancelar',
+  'common.no': 'Não',
+  'common.yes': 'Sim',
   'common.close': 'Fechar',
   'common.delete': 'Excluir',
   'common.rename': 'Renomear',
@@ -183,6 +185,8 @@ export const pt = {
   'downloads.fileMissing': 'O arquivo baixado está ausente ou inválido.',
   'downloads.fileInvalid': 'O arquivo baixado não pôde ser reproduzido.',
   'downloads.fileMissingTitle': 'Download indisponível',
+  'downloads.removeConfirmTitle': 'Remover download?',
+  'downloads.removeConfirmMessage': 'Deseja mesmo apagar este download do dispositivo?',
   'downloads.removeRecord': 'Remover registro',
   'downloads.retry': 'Baixar novamente',
   'downloads.invalid': 'O registro existe, mas o arquivo local está ausente ou inválido.',
