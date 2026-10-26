@@ -178,7 +178,7 @@ export const youtubeCatalog: CatalogProvider = {
         .map((item: any) => fromMusicItem(item))
         .filter((track: Track | null): track is Track => track !== null);
       let allTracks: Track[] | undefined;
-      if (topSongs && sectionTitle(topSongs).includes('top songs')) {
+      if (topSongs) {
         try {
           const allSongsPage = await page.getAllSongs();
           allTracks = allSongsPage?.contents

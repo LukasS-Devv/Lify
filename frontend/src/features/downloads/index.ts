@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { Directory, File, Paths } from 'expo-file-system';
+import { create } from 'zustand';
 import type { Track } from '@/types';
 import { downloadsRepo, getDb, settingsRepo, tracksRepo } from '@/database';
 import { getStreamServerUrl } from '@/services/catalog/server';
@@ -8,6 +9,27 @@ import { t } from '@/i18n';
 const DOWNLOADS_DIRECTORY = 'downloads';
 const directory = () => new Directory(Paths.document, DOWNLOADS_DIRECTORY);
 const activeDownloads = new Map<string, TrackDownloadTask>();
+
+interface DownloadedTracksStore {
+  trackIds: Set<string>;
+  revisions: Record<string, number>;
+  setDownloaded: (trackId: string, downloaded: boolean) => void;
+}
+
+export const useDownloadedTracksStore = create<DownloadedTracksStore>((set) => ({
+  trackIds: new Set(),
+  revisions: {},
+  setDownloaded: (trackId, downloaded) => set((state) => {
+    if (state.trackIds.has(trackId) === downloaded) return state;
+    const trackIds = new Set(state.trackIds);
+    if (downloaded) trackIds.add(trackId);
+    else trackIds.delete(trackId);
+    return {
+      trackIds,
+      revisions: { ...state.revisions, [trackId]: (state.revisions[trackId] ?? 0) + 1 },
+    };
+  }),
+}));
 
 export interface DownloadProgress {
   fraction: number | null;
@@ -80,6 +102,7 @@ export async function removeTrackDownload(trackId: string): Promise<void> {
     if (file.exists) file.delete();
   }
   await downloadsRepo.removeDownload(db, trackId);
+  useDownloadedTracksStore.getState().setDownloaded(trackId, false);
 }
 
 function extensionForMimeType(mimeType: string | null): string {
@@ -108,6 +131,7 @@ async function performDownload(
   const state = await getTrackDownloadState(track.id);
   if (isCancelled()) throw new DownloadCancelledError();
   if (state.status === 'available' && !force) {
+    useDownloadedTracksStore.getState().setDownloaded(track.id, true);
     return { localPath: state.localPath, alreadyDownloaded: true };
   }
 
@@ -168,9 +192,11 @@ async function performDownload(
     });
     if (isCancelled()) {
       await downloadsRepo.removeDownload(db, track.id);
+      useDownloadedTracksStore.getState().setDownloaded(track.id, false);
       throw new DownloadCancelledError();
     }
     promoted = true;
+    useDownloadedTracksStore.getState().setDownloaded(track.id, true);
     if (state.status !== 'none' && state.localPath !== promotedFile.uri && isInsideDownloads(state.localPath)) {
       try {
         const previousFile = new File(state.localPath);

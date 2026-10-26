@@ -3,7 +3,8 @@ import { FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ArtworkImage, EmptyState, Icon, IconButton, TrackRow } from '@/components';
+import { ArtworkImage, Button, EmptyState, Icon, IconButton, TrackRow } from '@/components';
+import { AddTracksToPlaylistModal } from '@/components/AddTracksToPlaylistModal';
 import { catalog } from '@/services/catalog';
 import type { ArtistProfile, CatalogArtist } from '@/services/catalog/types';
 import { t, useTranslation } from '@/i18n';
@@ -27,6 +28,7 @@ export default function ArtistScreen() {
   const [retry, setRetry] = useState(0);
   const [failedArtistId, setFailedArtistId] = useState<string | null>(null);
   const [showAllTracks, setShowAllTracks] = useState(false);
+  const [showAddTracks, setShowAddTracks] = useState(false);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
   useEffect(() => {
@@ -151,6 +153,12 @@ export default function ArtistScreen() {
           </Pressable>
           <Text style={s.sectionTitle}>{t('artist.topTracks')}</Text>
         </View>
+        <Button
+          label={t('artist.addAllTracks')}
+          icon="add"
+          onPress={() => setShowAddTracks(true)}
+          disabled={!profile.tracks.length}
+        />
         {profile.tracks.length > INITIAL_TRACK_COUNT ? (
           <Pressable accessibilityRole="button" onPress={() => setShowAllTracks(true)} hitSlop={8} style={s.showMore}>
             <Text style={s.showMoreText}>{t('artist.showAllTracks', { count: profile.tracks.length })}</Text>
@@ -259,6 +267,9 @@ export default function ArtistScreen() {
             />
           </View>
         </Modal>
+      ) : null}
+      {profile && showAddTracks ? (
+        <AddTracksToPlaylistModal tracks={profile.tracks} onClose={() => setShowAddTracks(false)} />
       ) : null}
     </View>
   );
