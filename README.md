@@ -1,9 +1,8 @@
 # Lify
 
-O Lify é um projeto experimental de aplicativo móvel para explorar uma
-experiência de descoberta e reprodução de música. O app busca faixas e
-metadados no YouTube Music, oferece uma biblioteca local e reproduz áudio por
-meio de um servidor Node.js separado.
+O Lify é um projeto experimental de aplicativo móvel para descoberta e
+reprodução de música. Busca faixas e metadados no YouTube Music, mantém uma
+biblioteca local e reproduz áudio por meio de um servidor Node.js independente.
 
 > **Projeto de estudo, sem finalidade comercial.** O Lify é fornecido como
 > projeto experimental, sem garantias de disponibilidade ou adequação para
@@ -13,6 +12,8 @@ meio de um servidor Node.js separado.
 ## O que o app faz
 
 - Busca faixas e informações de catálogo usando `youtubei.js`.
+- Na versão web, usa o backend para pesquisar o catálogo e carregar artistas,
+  álbuns e playlists.
 - Reproduz áudio em segundo plano com `react-native-track-player`.
 - Mantém favoritos, histórico, playlists e preferências no próprio dispositivo,
   usando SQLite; esses dados não são enviados ao servidor de áudio.
@@ -20,6 +21,7 @@ meio de um servidor Node.js separado.
   YouTube Music para a biblioteca local.
 - Permite importar arquivos de áudio do dispositivo para playlists locais e
   reproduzi-los sem conexão.
+- Permite guardar faixas para reprodução offline no aplicativo móvel.
 - Permite exportar/importar backups da biblioteca e agendar cópias locais
   diárias, semanais ou mensais. O sistema pode atrasar as tarefas em segundo
   plano; os backups portáteis `.lifybackup` incluem os arquivos de áudio
@@ -56,11 +58,20 @@ usa yt-dlp por até dois minutos. Há limites para resoluções simultâneas e
 timeouts para pedidos. O endpoint
 `/health` informa se o servidor está ativo.
 
-Rotas:
+Rotas da API:
 
 - `GET /health`
 - `GET /stream/:videoId?profile=standard`
 - `GET /stream/:videoId?profile=dataSaver`
+- `GET /download/:videoId?profile=dataSaver` para downloads explícitos.
+- `GET /catalog/search`, `/catalog/suggestions`, `/catalog/artist/:id`,
+  `/catalog/collection/:kind/:id` e `/catalog/related/:videoId` para o catálogo
+  usado pelo cliente web.
+
+O perfil `dataSaver` é o usado pelo app. A API também aceita `standard` em
+`/stream` para compatibilidade com outros clientes. Consulte o
+[`README do backend`](./backend/README.md) para detalhes dos resolvedores,
+timeouts, pedidos `Range`, configuração e publicação.
 
 ## Executar localmente
 
@@ -90,8 +101,8 @@ npm install
 npm run dev
 ```
 
-O servidor escuta na porta `4000` por padrão. Pode ainda escolher outra porta, alterando a variável PORT. Para iniciar em modo normal, use
-`npm start`.
+O servidor escuta na porta `4000` por padrão. Para escolher outra porta,
+defina a variável `PORT`. Para iniciar em modo normal, use `npm start`.
 
 O app não vem com um servidor de áudio predefinido. Na primeira abertura, ele
 mostra um aviso para configurar o endereço em **Ajustes → Servidor de áudio**.
@@ -172,8 +183,6 @@ npm test
 - `frontend/src/services/catalog/` — busca e integração com o catálogo.
 - `frontend/src/services/audio/` — fila, controle e serviço de reprodução.
 - `frontend/src/database/` — banco SQLite, migrações e repositórios.
+- `frontend/src/storage/backups/` — backups manuais e agendados.
 - `backend/` — API Node.js para resolver e encaminhar áudio.
 - `frontend/THIRD_PARTY_NOTICES.md` — créditos e licenças de terceiros.
-
-Para detalhes de arquitetura, consulte
-[`frontend/(Lify)spoticrack_arquitetura.md`](./frontend/%28Lify%29spoticrack_arquitetura.md).
