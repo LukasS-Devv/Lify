@@ -1,22 +1,30 @@
-import { useEffect, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import type { PlaylistSummary, Track } from '@/types';
 import { getDb, playlistsRepo } from '@/database';
 import { t, useTranslation } from '@/i18n';
 import { colors, font, radius, spacing } from '@/theme/tokens';
 import { Button } from './Button';
 import { Icon } from './Icon';
+import { PickerModal } from './Overlays';
 
 export function AddTracksToPlaylistModal({ tracks, onClose }: {
   tracks: Track[];
   onClose: () => void;
 }) {
   useTranslation();
+  const router = useRouter();
   const [playlists, setPlaylists] = useState<PlaylistSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [addingId, setAddingId] = useState<number | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const filteredPlaylists = useMemo(
+    () => playlists.filter((playlist) => playlist.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())),
+    [playlists, query],
+  );
 
   useEffect(() => {
     let active = true;
@@ -54,19 +62,40 @@ export function AddTracksToPlaylistModal({ tracks, onClose }: {
   };
 
   return (
-    <Modal transparent animationType="fade" visible onRequestClose={close}>
-      <Pressable style={s.backdrop} onPress={close} />
-      <View style={s.sheet}>
-        <Text style={s.title}>{t('artist.addAllTracks')}</Text>
+    <PickerModal
+      visible
+      onClose={close}
+      busy={busy}
+      title={t('artist.addAllTracks')}
+      searchValue={query}
+      onSearchChange={setQuery}
+      searchPlaceholder={t('search.placeholder')}
+      footer={(
+        <View style={s.footer}>
+          <Button
+            icon="add"
+            variant="secondary"
+            label={t('library.newPlaylist')}
+            onPress={() => {
+              close();
+              router.push('/playlists');
+            }}
+            disabled={busy}
+          />
+          <Button label={result ? t('common.close') : t('common.cancel')} variant="secondary" onPress={close} disabled={busy} />
+        </View>
+      )}
+    >
         <Text style={s.hint}>{t('artist.choosePlaylist')}</Text>
 
         {result ? (
           <Text accessibilityRole="alert" style={s.result}>{result}</Text>
         ) : (
-          <ScrollView style={s.list}>
+          <View style={s.list}>
             {!loaded ? <Text style={s.hint}>{t('common.loading')}</Text> : null}
             {loaded && playlists.length === 0 ? <Text style={s.hint}>{t('actions.noPlaylists')}</Text> : null}
-            {playlists.map((playlist) => (
+            {loaded && playlists.length > 0 && filteredPlaylists.length === 0 ? <Text style={s.hint}>{t('search.noResults', { query })}</Text> : null}
+            {filteredPlaylists.map((playlist) => (
               <Pressable
                 key={playlist.id}
                 accessibilityRole="button"
@@ -80,30 +109,23 @@ export function AddTracksToPlaylistModal({ tracks, onClose }: {
                   : <Icon name="chevron-forward" size={20} color={colors.textMuted} />}
               </Pressable>
             ))}
-          </ScrollView>
+          </View>
         )}
 
         {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
-
-        <View style={s.actions}>
-          <Button label={result ? t('common.close') : t('common.cancel')} variant="secondary" onPress={close} disabled={busy} />
-        </View>
-      </View>
-    </Modal>
+    </PickerModal>
   );
 }
 
 const s = StyleSheet.create({
-  backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.overlay },
-  sheet: { marginTop: 'auto', backgroundColor: colors.surfaceAlt, padding: spacing.lg, paddingBottom: spacing.xl * 2, gap: spacing.md, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl },
-  title: { color: colors.text, fontSize: font.xl, fontWeight: '800' },
   hint: { color: colors.textMuted, fontSize: font.md },
-  list: { maxHeight: 320 },
-  row: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md, paddingHorizontal: spacing.md, marginBottom: spacing.sm, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md },
-  rowText: { flex: 1, color: colors.text, fontSize: font.lg },
+  list: { maxHeight: 360 },
+  row: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md, paddingHorizontal: spacing.sm, borderRadius: radius.sm },
+  rowText: { flex: 1, color: colors.text, fontSize: font.md },
   rowAction: { color: colors.textMuted, fontSize: font.sm },
   result: { color: colors.text, fontSize: font.md, lineHeight: 22 },
   error: { color: colors.danger, fontSize: font.sm },
   actions: { flexDirection: 'row', justifyContent: 'flex-end' },
+  footer: { gap: spacing.sm },
   pressed: { opacity: 0.7 },
 });

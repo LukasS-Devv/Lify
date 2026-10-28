@@ -3,7 +3,7 @@ import { ActivityIndicator, Animated, FlatList, Pressable, StyleSheet, Text, Vie
 import { useRouter } from 'expo-router';
 import Slider from '@react-native-community/slider';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useProgress } from 'react-native-track-player';
+import { useProgress } from '@/services/audio/useProgress';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Cover, EmptyState, FavoriteToast, Icon, IconButton, SleepTimerModal, TrackActionsModal } from '@/components';
 import { usePlayer } from '@/features/player/usePlayer';
@@ -33,6 +33,7 @@ export default function PlayerScreen() {
   const { position, duration } = useProgress(500);
   const [dragging, setDragging] = useState<number | null>(null);
   const [menu, setMenu] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number }>();
   const [queueOpen, setQueueOpen] = useState(false);
   const [sleepTimerVisible, setSleepTimerVisible] = useState(false);
   const [timerNow, setTimerNow] = useState(Date.now());
@@ -54,7 +55,12 @@ export default function PlayerScreen() {
     return (
       <SafeAreaView style={s.root}>
         <EmptyState icon="musical-notes" message={t('player.nothing')} />
-        <View style={{ alignItems: 'center' }}><Button label={t('common.close')} onPress={() => router.back()} /></View>
+        <View style={{ alignItems: 'center' }}>
+          <Button
+            label={t('common.close')}
+            onPress={() => router.canGoBack() ? router.back() : router.replace('/')}
+          />
+        </View>
       </SafeAreaView>
     );
   }
@@ -87,9 +93,19 @@ export default function PlayerScreen() {
   const header = (
     <View>
       <View style={s.top}>
-        <IconButton icon="chevron-down" size={28} label={t('common.close')} onPress={() => router.back()} />
+        <IconButton
+          icon="chevron-down"
+          size={28}
+          label={t('common.close')}
+          onPress={() => router.canGoBack() ? router.back() : router.replace('/')}
+        />
         <Text style={s.topTitle}>{t('player.nowPlaying')}</Text>
-        <IconButton icon="ellipsis-horizontal" label={t('common.more')} onPress={() => setMenu(true)} />
+        <IconButton
+          icon="ellipsis-horizontal"
+          label={t('common.more')}
+          onPress={() => setMenu(true)}
+          onPressWithPosition={setMenuPosition}
+        />
       </View>
 
       <Animated.View style={[s.artWrap, shadow.card, { transform: [{ scale }] }]}>
@@ -211,7 +227,8 @@ export default function PlayerScreen() {
       </SafeAreaView>
       <TrackActionsModal
         track={menu ? track : null}
-        onClose={() => setMenu(false)}
+        position={menuPosition}
+        onClose={() => { setMenu(false); setMenuPosition(undefined); }}
         onSleepTimer={() => { setMenu(false); setSleepTimerVisible(true); }}
       />
       <FavoriteToast />

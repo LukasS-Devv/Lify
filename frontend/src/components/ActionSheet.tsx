@@ -1,41 +1,33 @@
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { t, useTranslation } from '@/i18n';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useTranslation } from '@/i18n';
 import { colors, font, radius, spacing } from '@/theme/tokens';
 import { Icon, type IconName } from './Icon';
+import { ContextMenu } from './Overlays';
 
 export interface SheetItem { icon: IconName; label: string; onPress: () => void; danger?: boolean }
 
 /** Folha inferior com lista de ações. */
-export function ActionSheet({ visible, title, items, onClose }: {
-  visible: boolean; title?: string; items: SheetItem[]; onClose: () => void;
+export function ActionSheet({ visible, title, items, onClose, position }: {
+  visible: boolean; title?: string; items: SheetItem[]; onClose: () => void; position?: { x: number; y: number };
 }) {
   useTranslation();
-  const insets = useSafeAreaInsets();
   return (
-    <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <Pressable style={s.backdrop} onPress={onClose} />
-      <View style={[s.sheet, { paddingBottom: Math.max(insets.bottom, spacing.md) + spacing.md }]}>
-        {title ? <Text numberOfLines={1} style={s.title}>{title}</Text> : null}
+    <ContextMenu visible={visible} onClose={onClose} title={title} position={position}>
         {items.map((it) => (
-          <Pressable key={it.label} onPress={() => { onClose(); it.onPress(); }} style={s.item}>
-            <Icon name={it.icon} size={22} color={it.danger ? colors.danger : colors.text} />
+          <View key={it.label}>
+            {it.danger ? <View style={s.divider} /> : null}
+            <Pressable accessibilityRole="menuitem" onPress={() => { onClose(); it.onPress(); }} style={s.item}>
+            <Icon name={it.icon} size={18} color={it.danger ? colors.danger : colors.textMuted} />
             <Text style={[s.itemText, it.danger && { color: colors.danger }]}>{it.label}</Text>
-          </Pressable>
+            </Pressable>
+          </View>
         ))}
-        <Pressable onPress={onClose} style={s.item}>
-          <Icon name="close" size={22} color={colors.textMuted} />
-          <Text style={[s.itemText, { color: colors.textMuted }]}>{t('common.close')}</Text>
-        </Pressable>
-      </View>
-    </Modal>
+    </ContextMenu>
   );
 }
 
 const s = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: colors.overlay },
-  sheet: { backgroundColor: colors.surfaceAlt, padding: spacing.md, paddingBottom: spacing.lg, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl },
-  title: { color: colors.text, fontSize: font.lg, fontWeight: '700', paddingVertical: spacing.sm },
-  item: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 14 },
-  itemText: { color: colors.text, fontSize: font.lg },
+  item: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.sm, borderRadius: radius.sm },
+  itemText: { color: colors.text, fontSize: font.md },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginVertical: spacing.xs },
 });

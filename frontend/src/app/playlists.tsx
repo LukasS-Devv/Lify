@@ -10,13 +10,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import * as DocumentPicker from 'expo-document-picker';
-import { Directory, File, Paths } from 'expo-file-system';
 import { useRouter } from 'expo-router';
 import { Button, Icon, IconButton } from '@/components';
 import { Header } from '@/components/spotify-clone';
 import { usePlaylists } from '@/features/playlists/usePlaylists';
 import { t, useTranslation } from '@/i18n';
+import { pickPlaylistCover } from '@/storage/playlistCover';
 import { colors, font, layout, radius, spacing } from '@/theme/tokens';
 
 export default function CreatePlaylist() {
@@ -31,21 +30,8 @@ export default function CreatePlaylist() {
   const selectCover = async () => {
     setFormError(null);
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'image/*',
-        copyToCacheDirectory: true,
-        multiple: false,
-      });
-      if (result.canceled) return;
-      const asset = result.assets[0];
-      if (!asset) throw new Error(t('playlist.coverPickFailed'));
-
-      const extension = asset.name?.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? 'jpg';
-      const directory = new Directory(Paths.document, 'playlist-covers');
-      directory.create({ intermediates: true, idempotent: true });
-      const savedFile = new File(directory, `playlist-${Date.now()}.${extension}`);
-      await new File(asset.uri).copy(savedFile);
-      setCoverUrl(savedFile.uri);
+      const uri = await pickPlaylistCover();
+      if (uri) setCoverUrl(uri);
     } catch (e) {
       setFormError(e instanceof Error ? e.message : t('common.error'));
     }
@@ -69,7 +55,11 @@ export default function CreatePlaylist() {
     <View style={s.root}>
       <Header
         title={t('playlist.newTitle')}
-        right={<IconButton icon="close" label={t('common.close')} onPress={() => router.back()} />}
+        right={<IconButton
+          icon="close"
+          label={t('common.close')}
+          onPress={() => router.canGoBack() ? router.back() : router.replace('/library')}
+        />}
       />
       <KeyboardAvoidingView style={s.body} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView

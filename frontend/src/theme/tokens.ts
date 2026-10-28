@@ -18,6 +18,21 @@ export const colors = {
   overlay: 'rgba(0, 0, 0, 0.70)',
 };
 
+export const overlayTokens = {
+  background: 'rgba(40, 40, 40, 0.96)',
+  border: 'rgba(255, 255, 255, 0.06)',
+  divider: 'rgba(255, 255, 255, 0.08)',
+  shadow: '0 16px 40px rgba(0, 0, 0, 0.5)',
+  scrim: 'rgba(0, 0, 0, 0.6)',
+  itemHover: 'rgba(255, 255, 255, 0.08)',
+  itemHeight: 40,
+  itemRadius: 8,
+  motionIn: '140ms ease-out',
+  motionOut: '100ms ease-in',
+  dialogRadius: 16,
+  sheetRadius: 20,
+};
+
 export const spacing = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 };
 export const radius = { sm: 6, md: 12, lg: 20, xl: 28, pill: 999 };
 export const font = { xs: 11, sm: 12, md: 14, lg: 16, xl: 22, xxl: 30, hero: 34 };

@@ -5,8 +5,8 @@ import TrackPlayer, {
   State,
   type Track as NativeTrack,
 } from 'react-native-track-player';
-import { Alert } from 'react-native';
 import { catalog } from '@/services/catalog';
+import { requestChoiceDialog } from '@/components/OverlayDialogHost';
 import { getDb, historyRepo, settingsRepo } from '@/database';
 import type { RepeatMode, Track } from '@/types';
 import {
@@ -285,11 +285,16 @@ async function showDownloadedTrackError(track: Track, token: number, message: st
   }
   if (token !== loadToken) return;
   store().set({ status: 'error', error: message });
-  Alert.alert(tr('downloads.fileMissingTitle'), message, [
-    {
-      text: tr('downloads.removeRecord'),
-      style: 'destructive',
-      onPress: () => {
+  void requestChoiceDialog({
+    title: tr('downloads.fileMissingTitle'),
+    message,
+    choices: [
+      { label: tr('common.cancel'), value: 'cancel' },
+      { label: tr('downloads.removeRecord'), value: 'remove', destructive: true },
+      { label: tr('downloads.retry'), value: 'retry' },
+    ],
+  }).then((choice) => {
+    if (choice === 'remove') {
         void removeTrackDownload(track.id).catch((error: unknown) => {
           console.error('[downloads] Could not remove an invalid download record', error);
           store().set({
@@ -297,11 +302,7 @@ async function showDownloadedTrackError(track: Track, token: number, message: st
             error: error instanceof Error ? error.message : tr('common.error'),
           });
         });
-      },
-    },
-    {
-      text: tr('downloads.retry'),
-      onPress: () => {
+    } else if (choice === 'retry') {
         let task: TrackDownloadTask;
         try {
           task = startTrackDownload(track, undefined, true);
@@ -323,9 +324,10 @@ async function showDownloadedTrackError(track: Track, token: number, message: st
             });
           },
         );
-      },
-    },
-  ]);
+    }
+  }).catch((error: unknown) => {
+    console.error('[downloads] Could not show the invalid-download dialog', error);
+  });
 }
 
 async function recordHistory(track: Track) {

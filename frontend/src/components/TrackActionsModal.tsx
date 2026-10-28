@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { PlaylistSummary, Track } from '@/types';
 import { favoritesRepo, getDb, playlistsRepo } from '@/database';
 import {
@@ -8,21 +8,22 @@ import {
 } from '@/features/downloads';
 import { toggleFavoriteWithFeedback } from '@/features/favorites/favoriteFeedback';
 import { addToQueueEnd, addToQueueNext } from '@/services/audio/controller';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { t, useTranslation } from '@/i18n';
 import { colors, font, radius, spacing } from '@/theme/tokens';
 import { Cover } from './Cover';
 import { Icon, type IconName } from './Icon';
+import { ContextMenu, Dialog } from './Overlays';
+import { Button } from './Button';
 
 /** Menu de ações de uma faixa: curtir, fila, adicionar a playlist. */
-export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSleepTimer, showIcons = true }: {
-  track: Track | null; onClose: () => void; onRemoveFromPlaylist?: (t: Track) => void; onSleepTimer?: () => void; showIcons?: boolean;
+export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSleepTimer, showIcons = true, position }: {
+  track: Track | null; onClose: () => void; onRemoveFromPlaylist?: (t: Track) => void; onSleepTimer?: () => void; showIcons?: boolean; position?: { x: number; y: number };
 }) {
   useTranslation();
-  const insets = useSafeAreaInsets();
   const [fav, setFav] = useState(false);
   const [lists, setLists] = useState<PlaylistSummary[]>([]);
   const [showLists, setShowLists] = useState(false);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [downloadState, setDownloadState] = useState<TrackDownloadState['status']>('none');
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
@@ -71,19 +72,14 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
 
   const confirmRemoveDownload = () => {
     if (downloadBusy) return;
-    Alert.alert(t('downloads.removeConfirmTitle'), t('downloads.removeConfirmMessage'), [
-      { text: t('common.no'), style: 'cancel' },
-      {
-        text: t('common.yes'),
-        style: 'destructive',
-        onPress: () => void run(async () => {
-          await removeTrackDownload(track.id);
-          setDownloadState('none');
-          return t('actions.downloadRemoved');
-        }),
-      },
-    ]);
+    setConfirmingRemove(true);
   };
+
+  const removeDownload = () => void run(async () => {
+      await removeTrackDownload(track.id);
+      setDownloadState('none');
+      return t('actions.downloadRemoved');
+    });
 
   const downloadOrRemove = async () => {
     if (downloadBusy) return;
@@ -112,11 +108,10 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
   };
 
   return (
-    <Modal transparent animationType="fade" visible onRequestClose={onClose}>
-      <Pressable style={s.backdrop} onPress={onClose} />
-      <View style={[s.sheet, { paddingBottom: Math.max(insets.bottom, spacing.md) + spacing.md }]}>
+    <>
+      <ContextMenu visible onClose={onClose} title={showLists ? t('actions.addToPlaylist') : undefined} position={position}>
         <View style={s.head}>
-          <Cover uri={track.artworkUrl} size={48} />
+          <Cover uri={track.artworkUrl} size={56} />
           <View style={{ flex: 1 }}>
             <Text numberOfLines={1} style={s.title}>{track.title}</Text>
             <Text numberOfLines={1} style={s.sub}>{track.artist}</Text>
@@ -138,7 +133,7 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
         ) : null}
 
         {showLists ? (
-          <ScrollView style={{ maxHeight: 280 }}>
+          <ScrollView style={s.list}>
             {lists.length === 0 ? <Text style={s.sub}>{t('actions.noPlaylists')}</Text> : null}
             {lists.map((p) => (
               <Item key={p.id} icon="list" showIcon={showIcons} label={p.name} onPress={() => run(async () => {
@@ -155,14 +150,16 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
               return now ? undefined : t('actions.unliked');
             })} />
             <Item icon="add-circle-outline" showIcon={showIcons} label={t('actions.addToPlaylist')} onPress={() => setShowLists(true)} />
+            <View style={s.divider} />
             <Item icon="play-forward-outline" showIcon={showIcons} label={t('actions.playNext')} onPress={() => run(() => { addToQueueNext(track); return t('actions.queued'); })} />
             <Item icon="list-outline" showIcon={showIcons} label={t('actions.addToQueue')} onPress={() => run(() => { addToQueueEnd([track]); return t('actions.queued'); })} />
+            <View style={s.divider} />
             {track.source === 'youtube' && !downloadBusy ? (
               <Item
                 icon={downloadState === 'available' ? 'checkmark-circle-outline' : 'download-outline'}
                 showIcon={showIcons}
                 label={downloadState === 'available' ? t('actions.downloaded') : t('actions.download')}
-                danger={downloadState === 'available'}
+                positive={downloadState === 'available'}
                 onPress={() => void downloadOrRemove()}
               />
             ) : null}
@@ -176,30 +173,44 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
             ) : null}
             {onSleepTimer ? <Item icon="timer-outline" showIcon={showIcons} label={t('player.sleepTimer.open')} onPress={onSleepTimer} /> : null}
             {onRemoveFromPlaylist ? (
+              <>
+              <View style={s.divider} />
               <Item icon="trash-outline" showIcon={showIcons} label={t('actions.removeFromPlaylist')} danger onPress={() => { onRemoveFromPlaylist(track); onClose(); }} />
+              </>
             ) : null}
           </>
         )}
-        <Item icon="close" showIcon={showIcons} label={t('common.close')} muted onPress={onClose} />
-      </View>
-    </Modal>
+      </ContextMenu>
+      <Dialog
+        visible={confirmingRemove}
+        onClose={() => setConfirmingRemove(false)}
+        title={t('downloads.removeConfirmTitle')}
+      >
+        <Text style={s.confirmMessage}>{t('downloads.removeConfirmMessage')}</Text>
+        <View style={s.actions}>
+          <Button label={t('common.no')} variant="secondary" onPress={() => setConfirmingRemove(false)} />
+          <Button label={t('common.yes')} variant="danger" onPress={() => {
+            setConfirmingRemove(false);
+            removeDownload();
+          }} />
+        </View>
+      </Dialog>
+    </>
   );
 }
 
-function Item({ icon, label, onPress, danger, muted, showIcon = true }: { icon: IconName; label: string; onPress: () => void; danger?: boolean; muted?: boolean; showIcon?: boolean }) {
-  const color = danger ? colors.danger : muted ? colors.textMuted : colors.text;
+function Item({ icon, label, onPress, danger, positive, muted, showIcon = true }: { icon: IconName; label: string; onPress: () => void; danger?: boolean; positive?: boolean; muted?: boolean; showIcon?: boolean }) {
+  const color = danger ? colors.danger : positive ? colors.accent : muted ? colors.textMuted : colors.text;
   return (
-    <Pressable onPress={onPress} style={s.item}>
-      {showIcon ? <Icon name={icon} size={22} color={color} /> : null}
+    <Pressable accessibilityRole="menuitem" onPress={onPress} style={s.item}>
+      {showIcon ? <Icon name={icon} size={18} color={color} /> : null}
       <Text style={[s.itemText, { color }]}>{label}</Text>
     </Pressable>
   );
 }
 
 const s = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: colors.overlay },
-  sheet: { backgroundColor: colors.surfaceAlt, padding: spacing.md, paddingBottom: spacing.lg, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl },
-  head: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingBottom: spacing.sm },
+  head: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingBottom: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   title: { color: colors.text, fontSize: font.lg, fontWeight: '700' },
   sub: { color: colors.textMuted, fontSize: font.md },
   msg: { color: colors.accent, marginBottom: spacing.sm, fontSize: font.md },
@@ -207,6 +218,10 @@ const s = StyleSheet.create({
   downloadStatus: { gap: spacing.xs, marginBottom: spacing.sm },
   progressTrack: { height: 4, borderRadius: 2, backgroundColor: colors.surface, overflow: 'hidden' },
   progressFill: { height: 4, backgroundColor: colors.accent },
-  item: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 14 },
-  itemText: { fontSize: font.lg },
+  list: { maxHeight: 280 },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginVertical: spacing.xs },
+  item: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.sm, borderRadius: radius.sm },
+  itemText: { fontSize: font.md },
+  confirmMessage: { color: colors.textMuted, fontSize: font.md },
+  actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm },
 });

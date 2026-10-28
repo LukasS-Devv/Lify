@@ -26,6 +26,7 @@ export default function VirtualPlaylistDetail() {
   const history = useHistory(500);
   const current = usePlayerStore(selectCurrentTrack);
   const [menuTrack, setMenuTrack] = useState<Track | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number }>();
 
   const tracks: Track[] = isLiked
     ? favorites.data
@@ -62,7 +63,7 @@ export default function VirtualPlaylistDetail() {
             track={item}
             active={item.id === current?.id}
             onPress={() => playQueue(tracks, index)}
-            onMore={() => setMenuTrack(item)}
+            onMore={(position) => { setMenuTrack(item); setMenuPosition(position); }}
           />
         )}
         ListEmptyComponent={
@@ -72,12 +73,18 @@ export default function VirtualPlaylistDetail() {
       />
 
       <View style={[s.topBar, { paddingTop: insets.top + spacing.sm }]} pointerEvents="box-none">
-        <IconButton icon="chevron-back" filled label={t('common.back')} onPress={() => router.back()} />
+        <IconButton
+          icon="chevron-back"
+          filled
+          label={t('common.back')}
+          onPress={() => router.canGoBack() ? router.back() : router.replace('/library')}
+        />
       </View>
 
       <TrackActionsModal
         track={menuTrack}
-        onClose={() => { setMenuTrack(null); void favorites.reload(); void history.reload(); }}
+        position={menuPosition}
+        onClose={() => { setMenuTrack(null); setMenuPosition(undefined); void favorites.reload(); void history.reload(); }}
       />
     </View>
   );

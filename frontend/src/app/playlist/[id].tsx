@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, FlatList, LayoutAnimation, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, FlatList, LayoutAnimation, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,8 +22,14 @@ import {
 } from '@/features/downloads';
 import { moveItem } from '@/utils/moveItem';
 import { colors, font, layout, spacing } from '@/theme/tokens';
+import { requestDialog } from '@/components/OverlayDialogHost';
 
 const COVER = 190;
+
+function showNotice(title: string, message: string): void {
+  void requestDialog({ title, message, confirmLabel: t('common.close') })
+    .catch((error: unknown) => console.error('[playlist] Could not show a dialog', error));
+}
 
 type PlaylistDownloadStatus = 'queued' | 'downloading' | 'completed' | 'failed' | 'cancelled';
 
@@ -44,7 +50,9 @@ export default function PlaylistDetail() {
   const { playlist, tracks } = data;
   const current = usePlayerStore(selectCurrentTrack);
   const [menuTrack, setMenuTrack] = useState<Track | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number }>();
   const [sheet, setSheet] = useState(false);
+  const [sheetPosition, setSheetPosition] = useState<{ x: number; y: number }>();
   const [renaming, setRenaming] = useState(false);
   const [importingLocalAudio, setImportingLocalAudio] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -91,7 +99,7 @@ export default function PlaylistDetail() {
     if (!cancelled && from !== null && to !== null && from !== to) {
       void move(from, to)
         .catch((error: unknown) => {
-          Alert.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
+          showNotice(t('common.error'), error instanceof Error ? error.message : t('common.error'));
         })
         .finally(() => {
           setDraggedTracks(null);
@@ -112,17 +120,32 @@ export default function PlaylistDetail() {
       activeDownload.current?.cancel();
     };
   }, []);
-  const confirmDelete = () =>
-    Alert.alert(t('playlist.deleteTitle'), t('playlist.deleteMessage', { name: playlist?.name ?? '' }), [
-      { text: t('common.cancel'), style: 'cancel' },
-      { text: t('common.delete'), style: 'destructive', onPress: async () => { await remove(); router.back(); } },
-    ]);
+  const deletePlaylist = async () => {
+    await remove();
+    if (router.canGoBack()) router.back();
+    else router.replace('/library');
+  };
+  const confirmDelete = () => {
+    const message = t('playlist.deleteMessage', { name: playlist?.name ?? '' });
+    void requestDialog({
+      title: t('playlist.deleteTitle'),
+      message,
+      confirmLabel: t('common.delete'),
+      destructive: true,
+    }).then((confirmed) => {
+      if (confirmed) void deletePlaylist();
+    }).catch((error: unknown) => showNotice(t('common.error'), error instanceof Error ? error.message : t('common.error')));
+  };
 
   if (!loading && !playlist) {
     return (
       <View style={s.root}>
         <View style={[s.topBar, { paddingTop: insets.top + spacing.sm }]}>
-          <IconButton icon="chevron-back" label={t('common.back')} onPress={() => router.back()} />
+          <IconButton
+            icon="chevron-back"
+            label={t('common.back')}
+            onPress={() => router.canGoBack() ? router.back() : router.replace('/library')}
+          />
         </View>
         <EmptyState icon="alert-circle-outline" message={t('playlist.notFound')} />
       </View>
@@ -169,12 +192,12 @@ export default function PlaylistDetail() {
       const result = await importLocalAudioToPlaylist(playlistId);
       if (result.status === 'cancelled') return;
       await reload();
-      Alert.alert(
+      showNotice(
         t('playlist.importLocalAudio'),
         t('playlist.importLocalAudioResult', { added: result.added, skipped: result.skipped }),
       );
     } catch (error) {
-      Alert.alert(
+      showNotice(
         t('playlist.importLocalAudio'),
         error instanceof Error ? error.message : t('playlist.importLocalAudioFailed'),
       );
@@ -255,7 +278,7 @@ export default function PlaylistDetail() {
       }
     } catch (error) {
       if (screenMounted.current) {
-        Alert.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
+        showNotice(t('common.error'), error instanceof Error ? error.message : t('common.error'));
       }
     } finally {
       queueRunning.current = false;
@@ -371,7 +394,7 @@ export default function PlaylistDetail() {
             <TrackRow
               track={item} active={item.id === current?.id}
               onPress={() => { if (!reordering) void playPlaylist(index); }}
-              onMore={reordering ? undefined : () => setMenuTrack(item)}
+              onMore={reordering ? undefined : (position) => { setMenuTrack(item); setMenuPosition(position); }}
               trailing={reordering ? (
                 <DragHandle
                   index={index}
@@ -391,11 +414,28 @@ export default function PlaylistDetail() {
       />
 
       <View style={[s.topBar, s.topBarAbs, { paddingTop: insets.top + spacing.sm }]} pointerEvents="box-none">
-        <IconButton icon="chevron-back" filled label={t('common.back')} onPress={() => router.back()} />
-        <IconButton icon="ellipsis-horizontal" filled label={t('common.more')} onPress={() => setSheet(true)} />
+        <IconButton
+          icon="chevron-back"
+          filled
+          label={t('common.back')}
+          onPress={() => router.canGoBack() ? router.back() : router.replace('/library')}
+        />
+        <IconButton
+          icon="ellipsis-horizontal"
+          filled
+          label={t('common.more')}
+          onPress={() => setSheet(true)}
+          onPressWithPosition={setSheetPosition}
+        />
       </View>
 
-      <ActionSheet visible={sheet} title={playlist?.name} items={items} onClose={() => setSheet(false)} />
+      <ActionSheet
+        visible={sheet}
+        title={playlist?.name}
+        items={items}
+        position={sheetPosition}
+        onClose={() => { setSheet(false); setSheetPosition(undefined); }}
+      />
       <TextPromptModal
         visible={renaming} title={t('playlist.renameTitle')} initialValue={playlist?.name ?? ''}
         placeholder={t('playlist.namePlaceholder')} confirmLabel={t('common.save')} error={renameError}
@@ -405,7 +445,12 @@ export default function PlaylistDetail() {
           catch (e) { setRenameError(e instanceof Error ? e.message : t('common.error')); }
         }}
       />
-      <TrackActionsModal track={menuTrack} onClose={() => setMenuTrack(null)} onRemoveFromPlaylist={removeTrack} />
+      <TrackActionsModal
+        track={menuTrack}
+        position={menuPosition}
+        onClose={() => { setMenuTrack(null); setMenuPosition(undefined); }}
+        onRemoveFromPlaylist={removeTrack}
+      />
     </View>
   );
 }

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ArtworkImage, Button, EmptyState, Icon, IconButton, TrackRow } from '@/components';
+import { ArtworkImage, EmptyState, Icon, IconButton, TrackRow } from '@/components';
 import { AddTracksToPlaylistModal } from '@/components/AddTracksToPlaylistModal';
 import { catalog } from '@/services/catalog';
 import type { ArtistProfile, CatalogArtist } from '@/services/catalog/types';
@@ -12,6 +12,7 @@ import { playQueue } from '@/services/audio/controller';
 import { colors, font, layout, radius, spacing } from '@/theme/tokens';
 import { Slider } from '@/components/spotify-clone/Slider';
 import type { CardItem } from '@/components/spotify-clone/Card';
+import { FullscreenOverlay } from '@/components/Overlays';
 
 const HERO_HEIGHT = 370;
 const INITIAL_TRACK_COUNT = 5;
@@ -153,12 +154,16 @@ export default function ArtistScreen() {
           </Pressable>
           <Text style={s.sectionTitle}>{t('artist.topTracks')}</Text>
         </View>
-        <Button
-          label={t('artist.addAllTracks')}
-          icon="add"
-          onPress={() => setShowAddTracks(true)}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('artist.addAllTracks')}
           disabled={!profile.tracks.length}
-        />
+          onPress={() => setShowAddTracks(true)}
+          style={({ pressed }) => [s.addTracksButton, (pressed || !profile.tracks.length) && s.addTracksButtonDimmed]}
+        >
+          <Icon name="add" size={18} color={colors.textMuted} />
+          <Text style={s.addTracksLabel}>{t('artist.addAllTracks')}</Text>
+        </Pressable>
         {profile.tracks.length > INITIAL_TRACK_COUNT ? (
           <Pressable accessibilityRole="button" onPress={() => setShowAllTracks(true)} hitSlop={8} style={s.showMore}>
             <Text style={s.showMoreText}>{t('artist.showAllTracks', { count: profile.tracks.length })}</Text>
@@ -238,11 +243,16 @@ export default function ArtistScreen() {
         showsVerticalScrollIndicator={false}
       />
       <View style={[s.topBar, { paddingTop: insets.top + spacing.sm }]}>
-        <IconButton icon="chevron-back" filled label={t('common.back')} onPress={() => router.back()} />
+        <IconButton
+          icon="chevron-back"
+          filled
+          label={t('common.back')}
+          onPress={() => router.canGoBack() ? router.back() : router.replace('/search')}
+        />
       </View>
       {profile ? (
-        <Modal visible={showAllTracks} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => setShowAllTracks(false)}>
-          <View style={[s.allTracksModal, { paddingTop: insets.top }]}>
+        <FullscreenOverlay visible={showAllTracks} onClose={() => setShowAllTracks(false)} contentStyle={s.allTracksModal}>
+          <View style={{ paddingTop: insets.top }}>
             <View style={s.allTracksHeader}>
               <IconButton icon="chevron-back" filled label={t('common.back')} onPress={() => setShowAllTracks(false)} />
               <View style={s.allTracksTitleWrap}>
@@ -266,7 +276,7 @@ export default function ArtistScreen() {
               showsVerticalScrollIndicator={false}
             />
           </View>
-        </Modal>
+        </FullscreenOverlay>
       ) : null}
       {profile && showAddTracks ? (
         <AddTracksToPlaylistModal tracks={profile.tracks} onClose={() => setShowAddTracks(false)} />
@@ -290,6 +300,9 @@ const s = StyleSheet.create({
   playButton: { width: 56, height: 56, borderRadius: 28, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', paddingLeft: 3 },
   disabled: { opacity: 0.45 },
   sectionTitle: { color: colors.text, fontSize: font.xl, fontWeight: '800' },
+  addTracksButton: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.xs, marginBottom: spacing.sm },
+  addTracksButtonDimmed: { opacity: 0.5 },
+  addTracksLabel: { color: colors.textMuted, fontSize: font.sm, fontWeight: '600' },
   descriptionBlock: { marginBottom: spacing.md },
   description: { color: colors.textMuted, fontSize: font.sm, lineHeight: 18 },
   descriptionToggle: { color: colors.text, fontSize: font.sm, fontWeight: '700', marginTop: spacing.xs },

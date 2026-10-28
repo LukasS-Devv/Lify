@@ -3,16 +3,17 @@ import { colors, font, radius, spacing } from '@/theme/tokens';
 
 export type LibraryCategory = 'favorites' | 'history' | 'playlists';
 
-export function LibraryRelated({ value, onChange, labels }: {
+export function LibraryRelated({ value, onChange, labels, desktop = false }: {
   value: LibraryCategory | null;
   onChange: (category: LibraryCategory | null) => void;
   labels: Record<LibraryCategory, string>;
+  desktop?: boolean;
 }) {
   const categories: LibraryCategory[] = ['favorites', 'history', 'playlists'];
 
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.scroll}>
-      <View style={s.row}>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[s.scroll, desktop && s.desktopScroll]}>
+      <View style={[s.row, desktop && s.desktopRow]}>
         {categories.map((category) => {
           const active = value === category;
           return (
@@ -34,7 +35,9 @@ export function LibraryRelated({ value, onChange, labels }: {
 
 const s = StyleSheet.create({
   scroll: { backgroundColor: colors.bg, paddingBottom: spacing.sm },
+  desktopScroll: { backgroundColor: 'transparent', paddingBottom: 0 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: spacing.md },
+  desktopRow: { paddingHorizontal: 0 },
   category: { backgroundColor: colors.surfaceAlt, paddingVertical: spacing.sm, paddingHorizontal: 16, borderRadius: radius.pill },
   label: { color: colors.text, fontSize: font.sm },
   selected: { backgroundColor: colors.accent },

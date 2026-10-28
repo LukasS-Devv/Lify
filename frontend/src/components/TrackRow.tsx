@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View, type GestureResponderEvent } from 'react-native';
 import type { Track } from '@/types';
 import { formatDuration } from '@/utils/track';
 import { colors, font, layout, radius, spacing } from '@/theme/tokens';
@@ -7,10 +7,9 @@ import { t, useTranslation } from '@/i18n';
 import { getTrackDownloadState, useDownloadedTracksStore } from '@/features/downloads';
 import { Cover } from './Cover';
 import { Icon } from './Icon';
-import { IconButton } from './IconButton';
 
 export function TrackRow({ track, onPress, onMore, onArtistPress, active, trailing }: {
-  track: Track; onPress: () => void; onMore?: () => void; onArtistPress?: () => void; active?: boolean; trailing?: React.ReactNode;
+  track: Track; onPress: () => void; onMore?: (position: { x: number; y: number }) => void; onArtistPress?: () => void; active?: boolean; trailing?: React.ReactNode;
 }) {
   useTranslation();
   const downloaded = useDownloadedTracksStore((state) => state.trackIds.has(track.id));
@@ -64,7 +63,20 @@ export function TrackRow({ track, onPress, onMore, onArtistPress, active, traili
         </View>
       </View>
       {trailing}
-      {onMore ? <IconButton icon="ellipsis-horizontal" label={t('common.more')} size={20} color={colors.textMuted} onPress={onMore} /> : null}
+      {onMore ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('common.more')}
+          hitSlop={10}
+          style={s.moreButton}
+          onPress={(event: GestureResponderEvent) => {
+            event.stopPropagation();
+            onMore({ x: event.nativeEvent.pageX, y: event.nativeEvent.pageY });
+          }}
+        >
+          <Icon name="ellipsis-horizontal" size={20} color={colors.textMuted} />
+        </Pressable>
+      ) : null}
     </Pressable>
   );
 }
@@ -78,4 +90,5 @@ const s = StyleSheet.create({
   sub: { color: colors.textMuted, fontSize: font.md, marginTop: 2 },
   artistLink: { color: colors.accent },
   activeOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' },
+  moreButton: { padding: 6, alignItems: 'center', justifyContent: 'center' },
 });

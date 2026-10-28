@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import Constants from 'expo-constants';
 import { Button, Icon, type IconName } from '@/components';
 import { useSettings } from '@/features/settings/useSettings';
 import { t, useTranslation } from '@/i18n';
 import { colors, font, layout, radius, spacing } from '@/theme/tokens';
+import { Dialog } from '@/components/Overlays';
 
 export default function Settings() {
   useTranslation();
@@ -21,9 +22,11 @@ export default function Settings() {
     clearHistory,
   } = useSettings();
   const [customServerUrl, setCustomServerUrl] = useState(settings.customStreamServerUrl);
+  const [showExportOptions, setShowExportOptions] = useState(false);
   useEffect(() => { setCustomServerUrl(settings.customStreamServerUrl); }, [settings.customStreamServerUrl]);
 
   return (
+    <>
     <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={s.content}>
       <Section title={t('settings.language')} hint={t('settings.languageHint')}>
         <RadioRow label={t('settings.portuguese')} selected={settings.language === 'pt'} onPress={() => update('language', 'pt')} />
@@ -60,7 +63,7 @@ export default function Settings() {
         <Text style={s.hint}>{t('settings.serverCustomHint')}</Text>
       </Section>
 
-      <Section title={t('settings.backup')} hint={t('settings.backupHint')}>
+      <Section title={t('settings.backup')} hint={t(Platform.OS === 'web' ? 'settings.webBackupHint' : 'settings.backupHint')}>
         <Text style={s.label}>{t('settings.autoBackupInterval')}</Text>
         {([0, 1, 7, 30] as const).map((days) => (
           <RadioRow
@@ -75,7 +78,7 @@ export default function Settings() {
             date: new Date(settings.lastAutoBackupAt).toLocaleString(),
           })}</Text>
         ) : null}
-        <Button icon="share-outline" label={t('settings.export')} onPress={doExport} disabled={busy} />
+        <Button icon="share-outline" label={t('settings.export')} onPress={() => setShowExportOptions(true)} disabled={busy} />
         <Button icon="download-outline" variant="secondary" label={t('settings.import')} onPress={doImport} disabled={busy} />
       </Section>
 
@@ -85,8 +88,41 @@ export default function Settings() {
 
       {message ? <Text style={s.msg}>{message}</Text> : null}
 
-      <Text style={s.version}>Lify · {t('settings.version', { version: Constants.expoConfig?.version ?? '1.0.0' })}</Text>
+      <Text style={s.version}>Lify · {t('settings.version', { version: Constants.expoConfig?.version ?? '1.1.2' })}</Text>
     </ScrollView>
+    <Dialog
+      visible={showExportOptions}
+      onClose={() => setShowExportOptions(false)}
+      title={t('settings.exportOptionsTitle')}
+    >
+          <Text style={s.hint}>{t('settings.exportOptionsMessage')}</Text>
+          <Button
+            icon="download-outline"
+            label={t('settings.exportWithDownloads')}
+            onPress={() => {
+              setShowExportOptions(false);
+              void doExport(true);
+            }}
+            disabled={busy}
+          />
+          <Button
+            icon="flash-outline"
+            variant="secondary"
+            label={t('settings.exportWithoutDownloads')}
+            onPress={() => {
+              setShowExportOptions(false);
+              void doExport(false);
+            }}
+            disabled={busy}
+          />
+          <Button
+            variant="secondary"
+            label={t('common.cancel')}
+            onPress={() => setShowExportOptions(false)}
+            disabled={busy}
+          />
+    </Dialog>
+    </>
   );
 }
 

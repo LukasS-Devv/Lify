@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { Directory, File, Paths } from 'expo-file-system';
+import { Platform } from 'react-native';
 import { create } from 'zustand';
 import type { Track } from '@/types';
 import { downloadsRepo, getDb, settingsRepo, tracksRepo } from '@/database';
@@ -76,6 +77,7 @@ async function hasValidFile(localPath: string): Promise<boolean> {
 }
 
 export async function getTrackDownloadState(trackId: string): Promise<TrackDownloadState> {
+  if (Platform.OS === 'web') return { status: 'none' };
   const record = await downloadsRepo.getDownload(await getDb(), trackId);
   if (!record) return { status: 'none' };
   return {
@@ -86,7 +88,7 @@ export async function getTrackDownloadState(trackId: string): Promise<TrackDownl
 }
 
 export async function getDownloadedTrackIds(trackIds: string[]): Promise<Set<string>> {
-  if (trackIds.length === 0) return new Set();
+  if (Platform.OS === 'web' || trackIds.length === 0) return new Set();
   const records = await downloadsRepo.listDownloads(await getDb(), trackIds);
   const valid = await Promise.all(records.map(async (record) => (
     await hasValidFile(record.local_path) ? record.track_id : null
@@ -97,7 +99,7 @@ export async function getDownloadedTrackIds(trackIds: string[]): Promise<Set<str
 export async function removeTrackDownload(trackId: string): Promise<void> {
   const db = await getDb();
   const record = await downloadsRepo.getDownload(db, trackId);
-  if (record && isInsideDownloads(record.local_path)) {
+  if (Platform.OS !== 'web' && record && isInsideDownloads(record.local_path)) {
     const file = new File(record.local_path);
     if (file.exists) file.delete();
   }
@@ -233,6 +235,7 @@ export function startTrackDownload(
   onProgress: (progress: DownloadProgress) => void = () => {},
   force = false,
 ): TrackDownloadTask {
+  if (Platform.OS === 'web') throw new Error(t('downloads.webUnavailable'));
   if (activeDownloads.has(track.id)) throw new Error(t('downloads.alreadyInProgress'));
 
   let cancelled = false;

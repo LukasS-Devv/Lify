@@ -4,6 +4,8 @@ import type { CatalogArtist } from '@/services/catalog/types';
 import type { Track } from '@/types';
 import { t } from '@/i18n';
 
+const AUTO_SEARCH_DELAY = 300;
+
 export function useSearch() {
   const [query, setQueryState] = useState('');
   const [results, setResults] = useState<Track[]>([]);
@@ -15,10 +17,12 @@ export function useSearch() {
   const [searched, setSearched] = useState(false);
   const searchReqId = useRef(0);
   const suggestionReqId = useRef(0);
+  const lastSubmittedQuery = useRef('');
 
   const setQuery = useCallback((value: string) => {
     searchReqId.current++;
     suggestionReqId.current++;
+    lastSubmittedQuery.current = '';
     setQueryState(value);
     setResults([]);
     setArtists([]);
@@ -50,6 +54,7 @@ export function useSearch() {
   const submit = useCallback(async (override?: string) => {
     const q = (override ?? query).trim();
     if (!q) return;
+    lastSubmittedQuery.current = q;
     suggestionReqId.current++;
     const requestId = ++searchReqId.current;
     if (override !== undefined) setQueryState(q);
@@ -81,6 +86,16 @@ export function useSearch() {
       if (requestId === searchReqId.current) setLoading(false);
     }
   }, [query]);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2 || lastSubmittedQuery.current === q) return;
+
+    const timeout = setTimeout(() => {
+      if (lastSubmittedQuery.current !== q) void submit(q);
+    }, AUTO_SEARCH_DELAY);
+    return () => clearTimeout(timeout);
+  }, [query, submit]);
 
   const clear = useCallback(() => {
     searchReqId.current++;

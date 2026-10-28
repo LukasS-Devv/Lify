@@ -1,4 +1,4 @@
-export { BottomTabButton, TabBarBackground, type TabIconName } from './BottomTabBar';
+export { BottomTabButton, NavigationItemContent, NAV_ITEMS, TabBarBackground, type TabIconName } from './BottomTabBar';
 export { BrowseCategory } from './BrowseCategory';
 export { Card, type CardItem } from './Card';
 export { Header } from './Header';

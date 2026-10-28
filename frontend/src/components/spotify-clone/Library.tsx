@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type GestureResponderEvent } from 'react-native';
 import { useRouter } from 'expo-router';
 import { EmptyState } from '../EmptyState';
 import { IconButton } from '../IconButton';
@@ -28,15 +28,15 @@ type LibraryRow =
   | { id: string; type: 'system'; kind: 'liked' | 'history'; title: string; count: number; uris: string[] }
   | { id: string; type: 'track'; track: Track; index: number; queue: Track[] };
 
-function PlaylistRow({ cover, title, count, pinned, onPress, onLongPress }: {
-  cover: ReactNode; title: string; count: number; pinned?: boolean; onPress: () => void; onLongPress?: () => void;
+function PlaylistRow({ cover, title, count, pinned, desktop = false, onPress, onLongPress }: {
+  cover: ReactNode; title: string; count: number; pinned?: boolean; desktop?: boolean; onPress: () => void; onLongPress?: (position: { x: number; y: number }) => void;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
       onPress={onPress}
-      onLongPress={onLongPress}
-      style={({ pressed }) => [s.playlistRow, pressed && s.pressed]}
+      onLongPress={(event: GestureResponderEvent) => onLongPress?.({ x: event.nativeEvent.pageX, y: event.nativeEvent.pageY })}
+      style={({ pressed }) => [s.playlistRow, desktop && s.desktopPlaylistRow, pressed && s.pressed]}
     >
       {cover}
       <View style={s.playlistInfo}>
@@ -51,6 +51,8 @@ function PlaylistRow({ cover, title, count, pinned, onPress, onLongPress }: {
 }
 
 export function Library({ openCategory, openNonce }: { openCategory?: LibraryCategory; openNonce?: string }) {
+  const { width } = useWindowDimensions();
+  const desktop = Platform.OS === 'web' && width >= 1024;
   const router = useRouter();
   const [category, setCategory] = useState<LibraryCategory | null>(openCategory ?? null);
   useEffect(() => {
@@ -61,8 +63,10 @@ export function Library({ openCategory, openNonce }: { openCategory?: LibraryCat
   const playlists = usePlaylists();
   const current = usePlayerStore(selectCurrentTrack);
   const [menuTrack, setMenuTrack] = useState<Track | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number }>();
   const [importing, setImporting] = useState(false);
   const [pinTarget, setPinTarget] = useState<PlaylistSummary | null>(null);
+  const [pinPosition, setPinPosition] = useState<{ x: number; y: number }>();
   const [artists, setArtists] = useState<CatalogArtist[]>([]);
   const isPlaylist = category === 'playlists';
   const historyTracks = history.data.map(({ track }) => track);
@@ -155,21 +159,22 @@ export function Library({ openCategory, openNonce }: { openCategory?: LibraryCat
   }, [artistNames]);
 
   return (
-    <View style={s.container}>
+    <View style={[s.container, desktop && s.desktopContainer]}>
       <FlatList
         data={rows}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => item.type === 'section' ? (
-          <Text style={s.groupTitle}>{item.title}</Text>
+          <Text style={[s.groupTitle, desktop && s.desktopGroupTitle]}>{item.title}</Text>
         ) : item.type === 'track' ? (
           <TrackRow
             track={item.track}
             active={item.track.id === current?.id}
             onPress={() => playQueue(item.queue, item.index)}
-            onMore={() => setMenuTrack(item.track)}
+            onMore={(position) => { setMenuTrack(item.track); setMenuPosition(position); }}
           />
         ) : item.type === 'system' ? (
           <PlaylistRow
+            desktop={desktop}
             cover={<MosaicCover uris={item.uris} size={56} radius={radius.sm} seed={`virtual-${item.kind}`} />}
             title={item.title}
             count={item.count}
@@ -177,40 +182,60 @@ export function Library({ openCategory, openNonce }: { openCategory?: LibraryCat
           />
         ) : (
           <PlaylistRow
+            desktop={desktop}
             cover={<Cover uri={item.playlist.coverUrl} size={56} />}
             title={item.playlist.name}
             count={item.playlist.trackCount}
             pinned={item.playlist.pinned}
             onPress={() => router.push({ pathname: '/playlist/[id]', params: { id: String(item.playlist.id) } })}
-            onLongPress={() => setPinTarget(item.playlist)}
+            onLongPress={(position) => { setPinTarget(item.playlist); setPinPosition(position); }}
           />
         )}
         ListHeaderComponent={(
           <>
-            <Header
-              title={t('tabs.library')}
-              right={(
-                <>
-                  <IconButton icon="cloud-download-outline" size={24} label={t('import.action')} onPress={() => setImporting(true)} />
-                  <IconButton icon="add" size={28} label={t('library.newPlaylist')} onPress={() => router.push('/playlists')} />
-                </>
-              )}
-              related={(
+            {desktop ? (
+              <View style={s.desktopLibraryTools}>
                 <LibraryRelated
                   value={category}
                   onChange={setCategory}
+                  desktop
                   labels={{
                     favorites: t('library.tab.liked'),
                     history: t('library.tab.history'),
                     playlists: t('library.tab.playlists'),
                   }}
                 />
-              )}
-            />
+                <View style={s.desktopActions}>
+                  <IconButton icon="cloud-download-outline" size={24} label={t('import.action')} onPress={() => setImporting(true)} />
+                  <IconButton icon="add" size={28} label={t('library.newPlaylist')} onPress={() => router.push('/playlists')} />
+                </View>
+              </View>
+            ) : (
+              <Header
+                title={t('tabs.library')}
+                right={(
+                  <>
+                    <IconButton icon="cloud-download-outline" size={24} label={t('import.action')} onPress={() => setImporting(true)} />
+                    <IconButton icon="add" size={28} label={t('library.newPlaylist')} onPress={() => router.push('/playlists')} />
+                  </>
+                )}
+                related={(
+                  <LibraryRelated
+                    value={category}
+                    onChange={setCategory}
+                    labels={{
+                      favorites: t('library.tab.liked'),
+                      history: t('library.tab.history'),
+                      playlists: t('library.tab.playlists'),
+                    }}
+                  />
+                )}
+              />
+            )}
             {category === null && artists.length ? (
-              <View style={s.artistsSection}>
-                <Text style={s.artistsTitle}>{t('library.recentArtists')}</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.artistsRow}>
+              <View style={[s.artistsSection, desktop && s.desktopArtistsSection]}>
+                <Text style={[s.artistsTitle, desktop && s.desktopArtistsTitle]}>{t('library.recentArtists')}</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[s.artistsRow, desktop && s.desktopArtistsRow]}>
                   {artists.map((artist) => (
                     <Pressable
                       key={`${artist.id}-${artist.name}`}
@@ -229,7 +254,7 @@ export function Library({ openCategory, openNonce }: { openCategory?: LibraryCat
                 </ScrollView>
               </View>
             ) : null}
-            <View style={s.heading}>
+            <View style={[s.heading, desktop && s.desktopHeading]}>
               <Text style={s.title}>{title}</Text>
               {!isPlaylist && tracks.length ? (
                 <Pressable accessibilityRole="button" onPress={() => playQueue(tracks, 0)} style={s.playButton}>
@@ -240,7 +265,7 @@ export function Library({ openCategory, openNonce }: { openCategory?: LibraryCat
           </>
         )}
         ListEmptyComponent={<EmptyState loading={loading} message={loading ? t('common.loading') : emptyMessage} />}
-        contentContainerStyle={s.list}
+        contentContainerStyle={[s.list, desktop && s.desktopList]}
         showsVerticalScrollIndicator={false}
       />
       <ImportPlaylistModal
@@ -252,16 +277,21 @@ export function Library({ openCategory, openNonce }: { openCategory?: LibraryCat
           router.push({ pathname: '/playlist/[id]', params: { id: String(id) } });
         }}
       />
-      <TrackActionsModal track={menuTrack} onClose={() => { setMenuTrack(null); void favorites.reload(); }} />
+      <TrackActionsModal
+        track={menuTrack}
+        position={menuPosition}
+        onClose={() => { setMenuTrack(null); setMenuPosition(undefined); void favorites.reload(); }}
+      />
       <ActionSheet
         visible={pinTarget !== null}
         title={pinTarget?.name}
+        position={pinPosition}
         items={pinTarget ? [{
           icon: pinTarget.pinned ? 'pin' : 'pin-outline',
           label: pinTarget.pinned ? t('playlist.unpin') : t('playlist.pin'),
           onPress: () => void playlists.setPinned(pinTarget.id, !pinTarget.pinned),
         }] : []}
-        onClose={() => setPinTarget(null)}
+        onClose={() => { setPinTarget(null); setPinPosition(undefined); }}
       />
     </View>
   );
@@ -269,20 +299,30 @@ export function Library({ openCategory, openNonce }: { openCategory?: LibraryCat
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
+  desktopContainer: { backgroundColor: colors.surface },
   heading: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, paddingHorizontal: spacing.md },
+  desktopHeading: { marginTop: spacing.md, paddingHorizontal: 0 },
   title: { color: colors.text, fontSize: 16, fontWeight: '700', flex: 1 },
   groupTitle: { color: colors.text, fontSize: font.md, fontWeight: '700', paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.xs },
+  desktopGroupTitle: { paddingHorizontal: 0 },
   list: { paddingBottom: spacing.xl },
+  desktopList: { paddingHorizontal: spacing.lg },
+  desktopLibraryTools: { minHeight: 48, marginTop: spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
+  desktopActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   playButton: { backgroundColor: colors.accent, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   playLabel: { color: colors.accentText, fontSize: font.sm, fontWeight: '800' },
   playlistRow: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  desktopPlaylistRow: { width: '100%', maxWidth: 820, paddingHorizontal: 0 },
   playlistInfo: { flex: 1 },
   playlistTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   playlistTitle: { color: colors.text, fontSize: font.md, fontWeight: '700', flexShrink: 1 },
   playlistSubtitle: { color: colors.textMuted, fontSize: font.sm, marginTop: 3 },
   artistsSection: { paddingTop: spacing.md, paddingBottom: spacing.sm },
+  desktopArtistsSection: { paddingTop: spacing.md },
   artistsTitle: { color: colors.text, fontSize: font.md, fontWeight: '700', paddingHorizontal: spacing.md, marginBottom: spacing.sm },
+  desktopArtistsTitle: { paddingHorizontal: 0 },
   artistsRow: { gap: spacing.md, paddingHorizontal: spacing.md },
+  desktopArtistsRow: { paddingHorizontal: 0 },
   artist: { width: 76, alignItems: 'center', gap: spacing.xs },
   artistImage: { width: 68, height: 68, borderRadius: radius.pill, overflow: 'hidden', backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: colors.accent },
   artistImageContent: { width: '100%', height: '100%' },

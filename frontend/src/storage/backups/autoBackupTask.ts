@@ -1,5 +1,6 @@
 import * as BackgroundTask from 'expo-background-task';
 import * as TaskManager from 'expo-task-manager';
+import { Platform } from 'react-native';
 import { getDb, settingsRepo } from '@/database';
 import { createPortableBackupFile, removeLegacyAutomaticBackups } from './backup';
 import { isAutoBackupDue } from './schedule';
@@ -10,6 +11,7 @@ const MINIMUM_TASK_INTERVAL_MINUTES = 15;
 let running: Promise<boolean> | null = null;
 
 export async function runAutoBackupIfDue(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
   if (running) return running;
   running = (async () => {
     const db = await getDb();
@@ -43,6 +45,7 @@ TaskManager.defineTask(AUTO_BACKUP_TASK, async () => {
 });
 
 export async function configureAutoBackup(intervalDays: number): Promise<void> {
+  if (Platform.OS === 'web') return;
   if (intervalDays === 0) {
     await BackgroundTask.unregisterTaskAsync(AUTO_BACKUP_TASK);
     return;

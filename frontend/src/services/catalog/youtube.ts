@@ -1,4 +1,3 @@
-import type { Innertube } from 'youtubei.js/react-native';
 import type { Track } from '@/types';
 import { makeTrack } from '@/utils/track';
 import {
@@ -11,25 +10,20 @@ import {
   type StreamInfo,
 } from './types';
 import { getStreamServerUrl } from './server';
+import { createCatalogClient, type CatalogClient } from './client';
 import { getDb, settingsRepo } from '@/database';
 import { t } from '@/i18n';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-let innertube: Promise<Innertube> | null = null;
+let innertube: Promise<CatalogClient> | null = null;
 
-function getClient(): Promise<Innertube> {
+function getClient(): Promise<CatalogClient> {
   if (!innertube) {
-    // Carregado sob demanda: evita parsear o youtubei.js na abertura do app.
-    innertube = import('youtubei.js/react-native')
-      .then(({ Innertube }) => Innertube.create({
-        retrieve_player: true,
-        generate_session_locally: true,
-      }))
-      .catch((e: unknown) => {
-        innertube = null;
-        throw new CatalogError(t('catalog.clientFailed'), 'network');
-      });
+    innertube = createCatalogClient().catch(() => {
+      innertube = null;
+      throw new CatalogError(t('catalog.clientFailed'), 'network');
+    });
   }
   return innertube;
 }

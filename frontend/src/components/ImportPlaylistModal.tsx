@@ -1,9 +1,6 @@
 import { useState } from 'react';
 import {
-  KeyboardAvoidingView,
   Linking,
-  Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -23,7 +20,7 @@ import { t, useTranslation } from '@/i18n';
 import { colors, font, radius, spacing } from '@/theme/tokens';
 import { Button } from './Button';
 import { Cover } from './Cover';
-import { IconButton } from './IconButton';
+import { Dialog } from './Overlays';
 
 const CONVERTER_URL = 'https://www.tunemymusic.com/';
 const PREVIEW_ROWS = 5;
@@ -111,33 +108,15 @@ export function ImportPlaylistModal({
   };
 
   return (
-    <Modal
-      transparent
-      animationType="slide"
+    <Dialog
       visible={visible}
-      onRequestClose={close}
-      statusBarTranslucent
+      onClose={close}
+      busy={saving}
+      closeOnBackdrop={!saving}
+      title={t('import.title')}
+      width={480}
+      contentStyle={s.dialog}
     >
-      <KeyboardAvoidingView
-        style={s.backdrop}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}
-      >
-        <Pressable
-          style={StyleSheet.absoluteFill}
-          onPress={close}
-        />
-
-        <View style={s.sheet}>
-          <View style={s.head}>
-            <Text style={s.title}>{t('import.title')}</Text>
-            <IconButton
-              icon="close"
-              label={t('common.close')}
-              onPress={close}
-            />
-          </View>
-
           <ScrollView
             style={s.scroll}
             keyboardShouldPersistTaps="handled"
@@ -271,44 +250,13 @@ export function ImportPlaylistModal({
               </View>
             ) : null}
           </ScrollView>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
+    </Dialog>
   );
 }
 
 const s = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: colors.overlay,
-  },
-
-  sheet: {
-    maxHeight: '88%',
-    backgroundColor: colors.surfaceAlt,
-    padding: spacing.lg,
-    paddingBottom: spacing.xl*2,
-    gap: spacing.md,
-    borderTopLeftRadius: radius.xl,
-    borderTopRightRadius: radius.xl,
-  },
-
-  scroll: {
-    flexShrink: 1,
-  },
-
-  head: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-
-  title: {
-    color: colors.text,
-    fontSize: font.xl,
-    fontWeight: '800',
-  },
+  dialog: { maxHeight: '88%' },
+  scroll: { flexShrink: 1 },
 
   hint: {
     color: colors.textMuted,

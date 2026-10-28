@@ -16,7 +16,11 @@ export default function RecentTracksScreen() {
   return (
     <Screen
       title={t('home.recent')}
-      right={<IconButton icon="close" label={t('common.close')} onPress={() => router.back()} />}
+      right={<IconButton
+        icon="close"
+        label={t('common.close')}
+        onPress={() => router.canGoBack() ? router.back() : router.replace('/library')}
+      />}
     >
       <FlatList
         data={tracks}

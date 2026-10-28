@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { PlaylistSummary, Track } from '@/types';
 import { favoritesRepo, getDb, playlistsRepo } from '@/database';
 import { bumpFavoritesVersion } from '@/features/favorites/favoriteFeedback';
@@ -8,13 +8,14 @@ import { colors, font, radius, spacing } from '@/theme/tokens';
 import { Button } from './Button';
 import { Icon } from './Icon';
 import { cleanupUnreferencedLocalAudio } from '@/storage/localAudioCleanup';
+import { PickerModal } from './Overlays';
 
 /** Id reservado para a linha "Favoritos" dentro do conjunto de seleção. */
 const FAVORITES = -1;
 
 /** Marca/desmarca em quais playlists (e nos favoritos) a faixa deve estar. Só grava ao confirmar. */
-export function PlaylistPickerModal({ track, onCancel, onConfirm }: {
-  track: Track; onCancel: () => void; onConfirm: () => void;
+export function PlaylistPickerModal({ track, onCancel, onConfirm, onCreatePlaylist }: {
+  track: Track; onCancel: () => void; onConfirm: () => void; onCreatePlaylist: () => void;
 }) {
   useTranslation();
   const [lists, setLists] = useState<PlaylistSummary[]>([]);
@@ -23,6 +24,11 @@ export function PlaylistPickerModal({ track, onCancel, onConfirm }: {
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const filteredLists = useMemo(
+    () => lists.filter((playlist) => playlist.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())),
+    [lists, query],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -80,47 +86,55 @@ export function PlaylistPickerModal({ track, onCancel, onConfirm }: {
   };
 
   return (
-    <Modal transparent animationType="fade" visible onRequestClose={onCancel}>
-      <Pressable style={s.backdrop} onPress={onCancel} />
-      <View style={s.sheet}>
-        <Text style={s.title}>{t('favorite.pickerTitle')}</Text>
+    <PickerModal
+      visible
+      onClose={onCancel}
+      busy={busy}
+      title={t('favorite.pickerTitle')}
+      searchValue={query}
+      onSearchChange={setQuery}
+      searchPlaceholder={t('search.placeholder')}
+      footer={(
+        <View style={s.footer}>
+          <Button icon="add" label={t('library.newPlaylist')} variant="secondary" onPress={onCreatePlaylist} disabled={busy} />
+          <View style={s.actions}>
+            <Button label={t('common.cancel')} variant="secondary" onPress={onCancel} disabled={busy} />
+            <Button label={t('common.confirm')} onPress={() => void confirm()} loading={busy} />
+          </View>
+        </View>
+      )}
+    >
         <Text style={s.hint}>{t('favorite.pickerHint')}</Text>
 
-        <ScrollView style={{ maxHeight: 320 }}>
+        <View>
           <CheckRow label={t('favorite.likedSongs')} checked={selected.has(FAVORITES)} onPress={() => toggle(FAVORITES)} />
+          {!loaded ? <Text style={s.hint}>{t('common.loading')}</Text> : null}
           {loaded && lists.length === 0 ? <Text style={s.hint}>{t('actions.noPlaylists')}</Text> : null}
-          {lists.map((p) => (
+          {loaded && lists.length > 0 && filteredLists.length === 0 ? <Text style={s.hint}>{t('search.noResults', { query })}</Text> : null}
+          {filteredLists.map((p) => (
             <CheckRow key={p.id} label={p.name} checked={selected.has(p.id)} onPress={() => toggle(p.id)} />
           ))}
-        </ScrollView>
+        </View>
 
         {error ? <Text style={s.err}>{error}</Text> : null}
-
-        <View style={s.actions}>
-          <Button label={t('common.cancel')} variant="secondary" onPress={onCancel} />
-          <Button label={t('common.confirm')} onPress={() => void confirm()} loading={busy} />
-        </View>
-      </View>
-    </Modal>
+    </PickerModal>
   );
 }
 
 function CheckRow({ label, checked, onPress }: { label: string; checked: boolean; onPress: () => void }) {
   return (
     <Pressable accessibilityRole="checkbox" accessibilityState={{ checked }} onPress={onPress} style={s.row}>
-      <Icon name={checked ? 'checkbox' : 'square-outline'} size={24} color={checked ? colors.accent : colors.textMuted} />
+      <Icon name={checked ? 'checkbox' : 'square-outline'} size={18} color={checked ? colors.accent : colors.textMuted} />
       <Text numberOfLines={1} style={s.rowText}>{label}</Text>
     </Pressable>
   );
 }
 
 const s = StyleSheet.create({
-  backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.overlay },
-  sheet: { marginTop: 'auto', backgroundColor: colors.surfaceAlt, padding: spacing.lg,paddingBottom: spacing.xl*2 ,gap: spacing.md, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl },
-  title: { color: colors.text, fontSize: font.xl, fontWeight: '800' },
   hint: { color: colors.textMuted, fontSize: font.md },
-  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 56, paddingHorizontal: spacing.md, marginBottom: spacing.sm, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md },
-  rowText: { flex: 1, color: colors.text, fontSize: font.lg },
+  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 40, paddingHorizontal: spacing.sm, borderRadius: radius.sm },
+  rowText: { flex: 1, color: colors.text, fontSize: font.md },
   err: { color: colors.danger },
   actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm },
+  footer: { gap: spacing.sm },
 });

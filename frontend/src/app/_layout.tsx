@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform, useWindowDimensions } from 'react-native';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -8,12 +8,16 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { getDb, resetDatabase, settingsRepo } from '@/database';
 import { restoreNativeQueue } from '@/services/audio/controller';
 import { Button, EmptyState, FavoriteToast, GlobalBottomBar, MiniPlayer, Screen, ServerNotice } from '@/components';
+import { AppShell } from '@/components/AppShell';
 import { setLanguage, t, useTranslation } from '@/i18n';
 import { colors } from '@/theme/tokens';
 import { useStartupStore } from '@/services/startup';
 import { isStreamServerConfigured } from '@/services/catalog/server';
 import { ensureAutoBackupScheduled, runAutoBackupIfDue } from '@/storage/backups/autoBackupTask';
 import { cleanupUnreferencedLocalAudio } from '@/storage/localAudioCleanup';
+import { togglePlay } from '@/services/audio/controller';
+import { usePlayerStore } from '@/services/audio/store';
+import { OverlayDialogHost } from '@/components/OverlayDialogHost';
 
 void SplashScreen.preventAutoHideAsync().catch((error: unknown) => {
   console.warn('[startup] Could not keep the native splash visible', error);
@@ -28,6 +32,25 @@ export default function RootLayout() {
   const [splashReleased, setSplashReleased] = useState(false);
   const [resetting, setResetting] = useState(false);
   const pathname = usePathname();
+  const { width } = useWindowDimensions();
+  const desktop = Platform.OS === 'web' && width >= 1024;
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Space' || event.repeat || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement
+        && (target.isContentEditable || target.closest('input, textarea, select, button, a, [role="button"], [role="textbox"], [contenteditable="true"]'))
+      ) return;
+      if (!usePlayerStore.getState().queue.items.length) return;
+      event.preventDefault();
+      void togglePlay();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   useEffect(() => {
     void ensureAutoBackupScheduled().catch((backupError: unknown) => {
@@ -137,21 +160,24 @@ export default function RootLayout() {
           </Screen>
         ) : ready ? (
           <>
-            <Stack screenOptions={{ headerStyle: { backgroundColor: colors.bg }, headerTintColor: colors.text, contentStyle: { backgroundColor: colors.bg } }}>
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen name="player" options={{ presentation: 'modal', headerShown: false }} />
-              <Stack.Screen name="playlist/[id]" options={{ headerShown: false }} />
-              <Stack.Screen name="artist/[id]" options={{ headerShown: false }} />
-              <Stack.Screen name="collection/[id]" options={{ headerShown: false }} />
-              <Stack.Screen name="library/[kind]" options={{ headerShown: false }} />
-              <Stack.Screen name="playlists" options={{ headerShown: false }} />
-              <Stack.Screen name="recent" options={{ headerShown: false }} />
-              <Stack.Screen name="settings" options={{ title: t('settings.title'), headerShadowVisible: false }} />
-            </Stack>
-            {showGlobalMiniPlayer ? <MiniPlayer /> : null}
-            {showGlobalBar ? <ServerNotice /> : null}
-            {showGlobalBar ? <GlobalBottomBar /> : null}
+            <AppShell>
+              <Stack screenOptions={{ headerStyle: { backgroundColor: colors.bg }, headerTintColor: colors.text, contentStyle: { backgroundColor: colors.bg } }}>
+                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                <Stack.Screen name="player" options={{ presentation: 'modal', headerShown: false }} />
+                <Stack.Screen name="playlist/[id]" options={{ headerShown: false }} />
+                <Stack.Screen name="artist/[id]" options={{ headerShown: false }} />
+                <Stack.Screen name="collection/[id]" options={{ headerShown: false }} />
+                <Stack.Screen name="library/[kind]" options={{ headerShown: false }} />
+                <Stack.Screen name="playlists" options={{ headerShown: false }} />
+                <Stack.Screen name="recent" options={{ headerShown: false }} />
+                <Stack.Screen name="settings" options={{ title: t('settings.title'), headerShadowVisible: false }} />
+              </Stack>
+            </AppShell>
+            {!desktop && showGlobalMiniPlayer ? <MiniPlayer /> : null}
+            {!desktop && showGlobalBar ? <ServerNotice /> : null}
+            {!desktop && showGlobalBar ? <GlobalBottomBar /> : null}
             {pathname !== '/player' ? <FavoriteToast lifted={showGlobalBar} /> : null}
+            <OverlayDialogHost />
           </>
         ) : null}
         {splashVisible && !error ? (

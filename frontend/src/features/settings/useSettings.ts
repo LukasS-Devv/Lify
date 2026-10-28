@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert } from 'react-native';
+import { requestDialog } from '@/components/OverlayDialogHost';
 import { getDb, historyRepo, settingsRepo } from '@/database';
 import { exportBackup, importBackup } from '@/storage/backups/backup';
 import { configureAutoBackup } from '@/storage/backups/autoBackupTask';
@@ -82,50 +82,49 @@ export function useSettings() {
     finally { setBusy(false); }
   }, []);
 
-  const doExport = useCallback(() => guarded(async () => {
-    const r = await exportBackup();
-    return r.shared ? t('settings.exported') : t('settings.exportedAt', { uri: r.uri });
+  const doExport = useCallback((includeDownloads: boolean) => guarded(async () => {
+    const r = await exportBackup(includeDownloads);
+    if (r.shared) return includeDownloads ? t('settings.exported') : t('settings.exportedWithoutDownloads');
+    return includeDownloads
+      ? t('settings.exportedAt', { uri: r.uri })
+      : t('settings.exportedAtWithoutDownloads', { uri: r.uri });
   }), [guarded]);
 
   const doImport = useCallback(() => {
-    Alert.alert(
-      t('settings.importTitle'),
-      t('settings.importMessage'),
-      [
-        { text: t('common.cancel'), style: 'cancel' },
-        { text: t('settings.importPick'), style: 'destructive', onPress: () => guarded(async () => {
-          const r = await importBackup();
-          if (r.status === 'cancelled') return t('settings.importCancelled');
-          await cleanupUnreferencedLocalAudio();
-          const s = await settingsRepo.loadSettings(await getDb());
-          await configureAutoBackup(s.autoBackupIntervalDays);
-          setSettings(s);
-          setLanguage(s.language);
-          useStartupStore.getState().setStreamServerConfigured(isStreamServerConfigured(s));
-          return t('settings.importDone');
-        }) },
-      ],
-    );
+    void requestDialog({
+      title: t('settings.importTitle'),
+      message: t('settings.importMessage'),
+      confirmLabel: t('settings.importPick'),
+    }).then((confirmed) => {
+      if (!confirmed) return;
+      void guarded(async () => {
+        const r = await importBackup();
+        if (r.status === 'cancelled') return t('settings.importCancelled');
+        await cleanupUnreferencedLocalAudio();
+        const loaded = await settingsRepo.loadSettings(await getDb());
+        await configureAutoBackup(loaded.autoBackupIntervalDays);
+        setSettings(loaded);
+        setLanguage(loaded.language);
+        useStartupStore.getState().setStreamServerConfigured(isStreamServerConfigured(loaded));
+        return t('settings.importDone');
+      });
+    }).catch((error: unknown) => setMessage(error instanceof Error ? error.message : t('common.error')));
   }, [guarded]);
 
   const clearHistory = useCallback(() => {
-    Alert.alert(
-      t('settings.clearHistoryConfirmTitle'),
-      t('settings.clearHistoryConfirmMessage'),
-      [
-        { text: t('common.cancel'), style: 'cancel' },
-        {
-          text: t('settings.clearHistory'),
-          style: 'destructive',
-          onPress: () => {
-            void guarded(async () => {
-              await historyRepo.clearHistory(await getDb());
-              return t('settings.historyCleared');
-            });
-          },
-        },
-      ],
-    );
+    void requestDialog({
+      title: t('settings.clearHistoryConfirmTitle'),
+      message: t('settings.clearHistoryConfirmMessage'),
+      confirmLabel: t('settings.clearHistory'),
+      destructive: true,
+    }).then((confirmed) => {
+      if (confirmed) {
+        void guarded(async () => {
+        await historyRepo.clearHistory(await getDb());
+        return t('settings.historyCleared');
+      });
+      }
+    }).catch((error: unknown) => setMessage(error instanceof Error ? error.message : t('common.error')));
   }, [guarded]);
 
   return {

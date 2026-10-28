@@ -2,9 +2,9 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useStartupStore } from '@/services/startup';
 import { t, useTranslation } from '@/i18n';
-import { colors } from '@/theme/tokens';
+import { colors, radius, spacing } from '@/theme/tokens';
 
-export function ServerNotice() {
+export function ServerNotice({ desktop = false }: { desktop?: boolean }) {
   useTranslation();
   const router = useRouter();
   const configured = useStartupStore((state) => state.streamServerConfigured);
@@ -14,7 +14,7 @@ export function ServerNotice() {
   if (configured || dismissed) return null;
 
   return (
-    <View style={s.container}>
+    <View style={[s.container, desktop && s.desktopContainer]}>
       <Pressable accessibilityRole="button" onPress={() => router.push('/settings')} style={s.content}>
         <Text style={s.message}>{t('app.serverNotConfigured')}</Text>
         <Text style={s.action}>{t('app.configureServer')}</Text>
@@ -41,6 +41,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+  desktopContainer: { width: '100%', alignSelf: 'stretch', marginTop: spacing.sm, marginBottom: spacing.md, borderRadius: radius.sm },
   content: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
   message: { color: colors.text, flex: 1, fontSize: 13 },
   action: { color: colors.accent, fontSize: 13, fontWeight: '700' },

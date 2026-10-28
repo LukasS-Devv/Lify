@@ -20,6 +20,7 @@ export { PlaylistPickerModal } from './PlaylistPickerModal';
 export { FavoriteToast } from './FavoriteToast';
 export { ActionSheet } from './ActionSheet';
 export type { SheetItem } from './ActionSheet';
+export { BottomSheet, ContextMenu, Dialog, FullscreenOverlay, PickerModal, Toast } from './Overlays';
 export { PlayAllBar } from './PlayAllBar';
 export { MiniPlayer } from './MiniPlayer';
 export { GlobalBottomBar } from './GlobalBottomBar';

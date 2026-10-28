@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import type { LibraryCategory } from './LibraryRelated';
 import { EmptyState } from '@/components';
@@ -30,6 +30,21 @@ export function Home() {
     params: { category, nonce: String(Date.now()) },
   });
   const { width } = useWindowDimensions();
+  const desktop = Platform.OS === 'web' && width >= 1024;
+  const tablet = Platform.OS === 'web' && width >= 768 && width < 1024;
+  const sidebarWidth = width >= 1440 ? 280 : 72;
+  const shellContentWidth = desktop ? Math.min(width - sidebarWidth - spacing.md, 1400) : 0;
+  const genreGridWidth = shellContentWidth - spacing.lg * 2;
+  const genreColumns = desktop ? Math.min(6, Math.max(2, Math.floor((genreGridWidth + spacing.md) / 216))) : 2;
+  const genreCardWidth = desktop
+    ? (genreGridWidth - (genreColumns - 1) * spacing.md) / genreColumns
+    : undefined;
+  const tabletContentWidth = Math.min(width, 960);
+  const recentTileWidth = desktop
+    ? (shellContentWidth - spacing.lg * 2 - spacing.sm) / 2
+    : tablet
+      ? (tabletContentWidth - spacing.md * 2 - spacing.md * 2 - spacing.sm) / 2
+      : width / 2 - 20;
   const history = useHistory(100);
   const favorites = useFavorites();
   const playlists = usePlaylists();
@@ -197,15 +212,22 @@ export function Home() {
   }));
 
   return (
-    <View style={s.container}>
-      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
-        <View style={s.recentGrid}>
+    <View style={[s.container, desktop && s.desktopContainer]}>
+      <ScrollView
+        contentContainerStyle={[
+          s.scroll,
+          tablet && s.tabletScroll,
+          desktop && s.desktopScroll,
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={[s.recentGrid, desktop && s.desktopRecentGrid]}>
           {gridItems.map((item) => (
             <Pressable
               key={item.id}
               accessibilityRole="button"
               onPress={item.onPress}
-              style={({ pressed }) => [s.recentTile, { width: width / 2 - 20 }, pressed && s.pressed]}
+              style={({ pressed }) => [s.recentTile, { width: recentTileWidth }, pressed && s.pressed]}
             >
               <ArtworkImage uri={item.imageUrl} style={s.recentCover} />
               <Text numberOfLines={2} style={s.recentTitle}>{item.title}</Text>
@@ -219,16 +241,17 @@ export function Home() {
             items={recentCards.slice(0, 12)}
             onShowAll={() => router.push('/recent')}
             showAllLabel={t('common.seeMore')}
+            desktop={desktop}
           />
         ) : null}
         {recommendedCards.length ? (
-          <Slider title={t('home.recommended')} items={recommendedCards} />
+          <Slider title={t('home.recommended')} items={recommendedCards} desktop={desktop} />
         ) : null}
         {recommendationError ? <Text style={s.recommendationError}>{recommendationError}</Text> : null}
         {artistNames.length ? (
           <View>
             {artistCards.length ? (
-              <Slider title={t('home.topArtists')} items={artistCards} size={104} shape="circle" />
+              <Slider title={t('home.topArtists')} items={artistCards} size={104} shape="circle" desktop={desktop} />
             ) : artistsLoading ? (
               <EmptyState loading message={t('common.loading')} />
             ) : null}
@@ -243,10 +266,10 @@ export function Home() {
           </View>
         ) : null}
         {favoriteCards.length ? (
-          <Slider title={t('library.tab.liked')} items={favoriteCards} onShowAll={() => openLibrary('favorites')} showAllLabel={t('common.seeAll')} />
+          <Slider title={t('library.tab.liked')} items={favoriteCards} onShowAll={() => openLibrary('favorites')} showAllLabel={t('common.seeAll')} desktop={desktop} />
         ) : null}
         {playlistCards.length ? (
-          <Slider title={t('home.playlists')} items={playlistCards} onShowAll={() => openLibrary('playlists')} showAllLabel={t('common.seeAll')} />
+          <Slider title={t('home.playlists')} items={playlistCards} onShowAll={() => openLibrary('playlists')} showAllLabel={t('common.seeAll')} desktop={desktop} />
         ) : tracks.length || favoriteCards.length ? (
           <Pressable accessibilityRole="button" onPress={() => router.push('/playlists')} style={s.createPlaylist}>
             <Text style={s.createGlyph}>＋</Text>
@@ -259,9 +282,9 @@ export function Home() {
 
         {!tracks.length && !favoriteCards.length ? (
           <View style={s.discovery}>
-            <Text style={s.sectionTitle}>{t('home.discoverGenres')}</Text>
-            <Text style={s.discoveryHint}>{t('home.discoverGenresHint')}</Text>
-            <View style={s.genreGrid}>
+            <Text style={[s.sectionTitle, desktop && s.desktopSectionTitle]}>{t('home.discoverGenres')}</Text>
+            <Text style={[s.discoveryHint, desktop && s.desktopDiscoveryHint]}>{t('home.discoverGenresHint')}</Text>
+            <View style={[s.genreGrid, desktop && s.desktopGenreGrid]}>
               {GENRES.map((genre, index) => {
                 const title = t(genre.key);
                 return (
@@ -270,6 +293,7 @@ export function Home() {
                     title={title}
                     color={GENRE_COLORS[index % GENRE_COLORS.length]}
                     imageSource={GENRE_PLACEHOLDERS[genre.key]}
+                    desktopWidth={genreCardWidth}
                     onPress={() => router.push({ pathname: '/search', params: { genre: title } })}
                   />
                 );
@@ -286,7 +310,11 @@ export function Home() {
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   scroll: { paddingVertical: spacing.md, paddingBottom: spacing.xl },
+  tabletScroll: { width: '100%', maxWidth: 960, alignSelf: 'center', paddingHorizontal: spacing.md },
+  desktopScroll: { width: '100%', maxWidth: 1400, alignSelf: 'center', paddingHorizontal: spacing.lg },
+  desktopContainer: { backgroundColor: colors.surface },
   recentGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingHorizontal: spacing.md, marginBottom: spacing.lg },
+  desktopRecentGrid: { paddingHorizontal: 0 },
   recentTile: { height: 56, flexDirection: 'row', alignItems: 'center', overflow: 'hidden', borderRadius: radius.sm, backgroundColor: colors.surfaceAlt },
   recentCover: { width: 56, height: 56, backgroundColor: colors.surface },
   recentTitle: { flex: 1, color: colors.text, fontSize: 13, lineHeight: 16, fontWeight: '700', paddingHorizontal: spacing.sm },
@@ -303,7 +331,10 @@ const s = StyleSheet.create({
   createHint: { color: colors.textMuted, fontSize: font.sm },
   discovery: { marginTop: spacing.md },
   discoveryHint: { color: colors.textMuted, fontSize: font.sm, paddingHorizontal: spacing.md, marginTop: spacing.xs },
+  desktopDiscoveryHint: { paddingHorizontal: 0 },
   genreGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingBottom: spacing.md },
+  desktopGenreGrid: { justifyContent: 'flex-start', gap: spacing.md, paddingHorizontal: 0 },
   sectionTitle: { color: colors.text, fontSize: 16, fontWeight: '700', paddingHorizontal: spacing.md, marginBottom: spacing.sm },
+  desktopSectionTitle: { paddingHorizontal: 0 },
   pressed: { opacity: 0.78 },
 });

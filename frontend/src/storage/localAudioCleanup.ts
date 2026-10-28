@@ -1,12 +1,14 @@
 import { Directory, File, Paths } from 'expo-file-system';
+import { Platform } from 'react-native';
 import { getDb } from '@/database';
 import { currentOf } from '@/services/audio/queue';
 import { usePlayerStore } from '@/services/audio/store';
 
-const AUDIO_DIRECTORY = new Directory(Paths.document, 'audio');
-
 export async function cleanupUnreferencedLocalAudio(): Promise<void> {
-  if (!AUDIO_DIRECTORY.exists) return;
+  if (Platform.OS === 'web') return;
+
+  const audioDirectory = new Directory(Paths.document, 'audio');
+  if (!audioDirectory.exists) return;
   const db = await getDb();
   const activeTrack = currentOf(usePlayerStore.getState().queue);
   const rows = await db.getAllAsync<{ id: string; source_id: string }>(
@@ -38,8 +40,8 @@ export async function cleanupUnreferencedLocalAudio(): Promise<void> {
   const referenced = new Set(liveRows.map((row) => row.source_id));
   if (activeTrack?.source === 'local') referenced.add(activeTrack.sourceId);
 
-  const directoryUri = AUDIO_DIRECTORY.uri.endsWith('/') ? AUDIO_DIRECTORY.uri : `${AUDIO_DIRECTORY.uri}/`;
-  for (const entry of AUDIO_DIRECTORY.list()) {
+  const directoryUri = audioDirectory.uri.endsWith('/') ? audioDirectory.uri : `${audioDirectory.uri}/`;
+  for (const entry of audioDirectory.list()) {
     if (!(entry instanceof File) || !entry.uri.startsWith(directoryUri) || referenced.has(entry.uri)) continue;
     try {
       entry.delete();

@@ -1,8 +1,8 @@
 {
   "name": "lify",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
-  "main": "index.ts",
+  "main": "index",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
@@ -41,6 +41,7 @@
     "react-native-screens": "~4.26.0",
     "react-native-track-player": "4.1.2",
     "react-native-web": "^0.21.2",
+    "shaka-player": "^4.16.54",
     "youtubei.js": "^18.1.0",
     "zustand": "^5.0.15"
   },

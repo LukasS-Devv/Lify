@@ -97,7 +97,12 @@ export default function CollectionScreen() {
         showsVerticalScrollIndicator={false}
       />
       <View style={[s.topBar, { paddingTop: insets.top + spacing.sm }]} pointerEvents="box-none">
-        <IconButton icon="chevron-back" filled label={t('common.back')} onPress={() => router.back()} />
+        <IconButton
+          icon="chevron-back"
+          filled
+          label={t('common.back')}
+          onPress={() => router.canGoBack() ? router.back() : router.replace('/search')}
+        />
       </View>
     </View>
   );

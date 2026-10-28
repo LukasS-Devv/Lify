@@ -175,14 +175,17 @@ async function serializeDatabase(): Promise<Uint8Array> {
 }
 
 /** Creates a portable archive containing the database, imported audio, and downloads. */
-export async function createPortableBackupFile(prefix = 'lify-backup'): Promise<File> {
+export async function createPortableBackupFile(
+  prefix = 'lify-backup',
+  includeDownloads = true,
+): Promise<File> {
   const db = await getDb();
   const rows = await db.getAllAsync<LocalTrackBackupRow>(
     "SELECT id, source_id FROM tracks WHERE source = 'local' ORDER BY id",
   );
-  const downloadRows = await db.getAllAsync<DownloadBackupRow>(
-    'SELECT track_id, local_path FROM downloads ORDER BY track_id',
-  );
+  const downloadRows = includeDownloads
+    ? await db.getAllAsync<DownloadBackupRow>('SELECT track_id, local_path FROM downloads ORDER BY track_id')
+    : [];
   const fileByUri = new Map<string, { archiveName: string; file: File }>();
   const downloadByUri = new Map<string, { archiveName: string; file: File }>();
   const manifest: PortableBackupManifest = {
@@ -270,8 +273,8 @@ export async function createBackupFile(prefix?: string): Promise<File> {
 }
 
 /** Exporta o banco, áudios importados e downloads para um backup portátil. */
-export async function exportBackup(): Promise<{ uri: string; shared: boolean }> {
-  const file = await createPortableBackupFile();
+export async function exportBackup(includeDownloads: boolean): Promise<{ uri: string; shared: boolean }> {
+  const file = await createPortableBackupFile('lify-backup', includeDownloads);
   const canShare = await Sharing.isAvailableAsync();
   if (canShare) {
     await Sharing.shareAsync(file.uri, {
