@@ -22,6 +22,97 @@ test('health endpoint reports the server status', async (t) => {
   assert.deepEqual(await response.json(), { status: 'ok' });
 });
 
+test('browser clients can access the API and read audio response headers', async (t) => {
+  const baseUrl = await startTestServer(t);
+  const response = await fetch(`${baseUrl}/health`, {
+    headers: { Origin: 'https://lify.example' },
+  });
+  assert.equal(response.headers.get('access-control-allow-origin'), '*');
+  assert.match(response.headers.get('access-control-expose-headers'), /Content-Range/i);
+});
+
+test('CORS preflight permits browser audio range requests', async (t) => {
+  const baseUrl = await startTestServer(t);
+  const response = await fetch(`${baseUrl}/stream/abcdefghijk`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://lify.example',
+      'Access-Control-Request-Method': 'GET',
+      'Access-Control-Request-Headers': 'Range',
+    },
+  });
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get('access-control-allow-origin'), '*');
+  assert.match(response.headers.get('access-control-allow-methods'), /GET/);
+  assert.match(response.headers.get('access-control-allow-headers'), /Range/i);
+});
+
+test('CORS can be restricted to configured browser origins', async (t) => {
+  const baseUrl = await startAppServer(t, { corsOrigins: 'https://lify.example, https://preview.lify.example' });
+  const allowed = await fetch(`${baseUrl}/health`, {
+    headers: { Origin: 'https://lify.example' },
+  });
+  const blocked = await fetch(`${baseUrl}/health`, {
+    headers: { Origin: 'https://other.example' },
+  });
+  assert.equal(allowed.headers.get('access-control-allow-origin'), 'https://lify.example');
+  assert.equal(blocked.headers.get('access-control-allow-origin'), null);
+});
+
+test('catalog endpoints proxy browser search, suggestions, artists, collections, and related tracks', async (t) => {
+  const catalogClient = async () => ({
+    music: {
+      search: async (_query, { type }) => type === 'artist'
+        ? { artists: { contents: [{ id: 'UC123', title: 'Artist' }] } }
+        : { songs: { contents: [{ video_id: 'abcdefghijk', title: 'Song' }] } },
+      getSearchSuggestions: async () => [{ contents: [{ suggestion: 'Suggested song' }] }],
+      getArtist: async () => ({
+        header: { title: 'Artist' },
+        sections: [],
+        getAllSongs: async () => ({ contents: [{ video_id: 'abcdefghijk', title: 'Song' }] }),
+      }),
+      getAlbum: async () => ({
+        header: { title: 'Album' },
+        contents: [{ video_id: 'abcdefghijk', title: 'Song' }],
+        has_continuation: false,
+      }),
+      getPlaylist: async () => ({
+        header: { title: 'Playlist' },
+        items: [{ video_id: 'abcdefghijk', title: 'Song' }],
+        has_continuation: false,
+      }),
+      getUpNext: async () => ({ contents: [{ video_id: 'lmnopqrstuv', title: 'Related' }] }),
+    },
+  });
+  const baseUrl = await startAppServer(t, { catalogClient });
+  const getJson = async (path) => {
+    const response = await fetch(`${baseUrl}${path}`, {
+      headers: { Origin: 'https://lify.example' },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('access-control-allow-origin'), '*');
+    return response.json();
+  };
+
+  assert.equal((await getJson('/catalog/search?q=Song&type=song'))[0].video_id, 'abcdefghijk');
+  assert.equal((await getJson('/catalog/search?q=Artist&type=artist'))[0].id, 'UC123');
+  assert.equal((await getJson('/catalog/suggestions?q=Song'))[0].contents[0].suggestion, 'Suggested song');
+  assert.equal((await getJson('/catalog/artist/UC123')).allSongs[0].video_id, 'abcdefghijk');
+  assert.equal((await getJson('/catalog/collection/album/MPRE123')).contents[0].video_id, 'abcdefghijk');
+  assert.equal((await getJson('/catalog/collection/playlist/PL123')).items[0].video_id, 'abcdefghijk');
+  assert.equal((await getJson('/catalog/related/abcdefghijk'))[0].video_id, 'lmnopqrstuv');
+});
+
+test('catalog routes reject invalid query types and IDs', async (t) => {
+  const baseUrl = await startTestServer(t);
+  const invalidType = await fetch(`${baseUrl}/catalog/search?q=Song&type=video`);
+  assert.equal(invalidType.status, 400);
+  assert.deepEqual(await invalidType.json(), { error: 'invalid_catalog_type' });
+  const invalidId = await fetch(`${baseUrl}/catalog/related/invalid`);
+  assert.equal(invalidId.status, 400);
+  assert.deepEqual(await invalidId.json(), { error: 'invalid_video_id' });
+});
+
 test('stream endpoint rejects IDs that are not YouTube video IDs', async (t) => {
   const baseUrl = await startTestServer(t);
   const response = await fetch(`${baseUrl}/stream/not-a-video-id`);

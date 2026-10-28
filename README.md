@@ -39,7 +39,8 @@ uma faixa; o servidor usa `yt-dlp` para resolver uma URL de áudio disponível e
 encaminha a resposta do YouTube CDN ao player.
 
 ```text
-App ── busca e metadados ──> YouTube Music (youtubei.js)
+App mobile ── busca e metadados ──> YouTube Music (youtubei.js)
+App web ── catálogo ──> API Node ──> YouTube Music (youtubei.js)
  │
  ├── ID da faixa ──> API Node (yt-dlp) ──> YouTube CDN ──> player
  └── biblioteca, fila e preferências ──> SQLite no dispositivo
@@ -102,6 +103,27 @@ configuração e não vêm preenchidos no app ou no build.
 O app também permite escolher um servidor personalizado em **Ajustes → Servidor
 de áudio**. Um servidor personalizado precisa implementar as rotas e encaminhar
 os pedidos `Range` descritos acima.
+
+### Exportar e publicar a versão web
+
+Com o Firebase CLI instalado e autenticado (`firebase login`), na raiz do
+repositório:
+
+```powershell
+npm run web:export
+npm run hosting:deploy
+```
+
+O primeiro comando gera os arquivos estáticos em `frontend/dist`; o segundo
+gera a exportação e publica **somente o frontend estático** no Firebase Hosting
+do projeto `lifymusic`, em <https://lifymusic.web.app>. O deploy não publica,
+instala nem configura o backend. Para publicar apenas uma exportação já gerada,
+execute `firebase deploy --only hosting`.
+
+**O backend não faz parte desta hospedagem e não será enviado ao Firebase.**
+Para busca e reprodução, o app web precisa que você hospede o backend
+separadamente e informe a URL dele em **Ajustes → Servidor de áudio**. A
+biblioteca e as preferências continuam armazenadas localmente no navegador.
 
 ## Interface e inspiração visual
 

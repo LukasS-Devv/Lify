@@ -63,6 +63,18 @@ O cache contém apenas metadados/URLs temporárias de resolução, não o áudio
 Assim, o encaminhamento continua compatível com pedidos `Range` e seek, sem
 armazenar conteúdo protegido ou servir URLs depois da expiração.
 
+Rotas de catálogo usadas pelo cliente web:
+
+- `GET /catalog/search?q=...&type=song|artist`
+- `GET /catalog/suggestions?q=...`
+- `GET /catalog/artist/:id`
+- `GET /catalog/collection/:kind/:id` (`album` ou `playlist`)
+- `GET /catalog/related/:videoId`
+
+O navegador não pode chamar diretamente a API privada do YouTube Music por
+CORS. Na web, o app usa essas rotas do backend; no mobile, continua usando
+`youtubei.js` diretamente.
+
 ## Executar localmente
 
 Requer Node.js 22 ou superior.
@@ -90,6 +102,12 @@ Também é possível criar um Web Service manualmente com:
 
 O app usa sempre o perfil `dataSaver`. Se hospedar uma cópia própria do backend,
 informe seu endereço HTTPS em **Ajustes → Servidor de áudio** no app.
+
+Para clientes web, a API habilita CORS por padrão porque não usa cookies nem
+credenciais de navegador. Para restringir as origens permitidas, defina
+`CORS_ORIGINS` como uma lista separada por vírgulas, por exemplo
+`https://lify.example,https://preview.lify.example`. CORS não substitui
+autenticação nem controle de acesso; a API continua pública.
 
 ## Testes
 

@@ -11,6 +11,9 @@ const ytdlp = require('youtube-dl-exec');
 const { Innertube, Constants } = require('youtubei.js');
 
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+const CATALOG_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const MAX_CATALOG_QUERY_LENGTH = 200;
+const MAX_CATALOG_ITEMS = 500;
 const MAX_LOG_LENGTH = 4000;
 const MAX_EXTRACTOR_OUTPUT_LENGTH = 1_048_576;
 const AUDIO_FORMATS = {
@@ -180,14 +183,18 @@ function createApp({
   logger = console,
   // Innertube primeiro; YT_RESOLVER=ytdlp desliga-o e usa apenas yt-dlp.
   innertubeResolver = process.env.YT_RESOLVER === 'ytdlp' ? null : resolveWithInnertube,
+  catalogClient = getInnertubeSession,
   cookiesPath = prepareCookiesFile(process.env, logger),
   // Opcionais (desligados por defeito, mantêm o comportamento original):
   // YT_PLAYER_CLIENTS=tv,mweb  e  YT_JS_RUNTIME=node
   playerClients = process.env.YT_PLAYER_CLIENTS || '',
   jsRuntime = process.env.YT_JS_RUNTIME === 'node' ? `node:${process.execPath}` : '',
+  corsOrigins = process.env.CORS_ORIGINS || '*',
   ...providedOptions
 } = {}) {
   const options = { ...DEFAULT_OPTIONS, ...providedOptions };
+  const allowedOrigins = new Set(corsOrigins.split(',').map((origin) => origin.trim()).filter(Boolean));
+  const allowAnyOrigin = allowedOrigins.has('*');
   const cache = new Map();
   const pendingResolutions = new Map();
   const ytdlpPreferredUntil = new Map();
@@ -196,6 +203,32 @@ function createApp({
   let activeResolvers = 0;
   const app = express();
   app.disable('x-powered-by');
+  app.use((req, res, next) => {
+    const origin = req.get('Origin');
+    const originAllowed = origin && (allowAnyOrigin || allowedOrigins.has(origin));
+
+    if (originAllowed) {
+      res.setHeader('Access-Control-Allow-Origin', allowAnyOrigin ? '*' : origin);
+      if (!allowAnyOrigin) res.vary('Origin');
+      res.setHeader(
+        'Access-Control-Expose-Headers',
+        'Accept-Ranges, Content-Length, Content-Range, Content-Disposition, Retry-After',
+      );
+    } else if (req.method === 'OPTIONS') {
+      res.sendStatus(403);
+      return;
+    }
+
+    if (req.method === 'OPTIONS' && originAllowed) {
+      res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Range');
+      res.setHeader('Access-Control-Max-Age', '86400');
+      res.status(204).end();
+      return;
+    }
+
+    next();
+  });
 
   function getCachedResolution(key) {
     const entry = cache.get(key);
@@ -383,6 +416,112 @@ function createApp({
 
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
+  });
+
+  async function withCatalog(res, action) {
+    try {
+      const client = await catalogClient();
+      res.json(await action(client));
+    } catch (error) {
+      logger.error?.('[catalog] request failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      if (!res.headersSent) res.status(502).json({ error: 'catalog_unavailable' });
+    }
+  }
+
+  app.get('/catalog/search', (req, res) => {
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    const type = req.query.type;
+    if (!query || query.length > MAX_CATALOG_QUERY_LENGTH) {
+      res.status(400).json({ error: 'invalid_catalog_query' });
+      return;
+    }
+    if (type !== 'song' && type !== 'artist') {
+      res.status(400).json({ error: 'invalid_catalog_type' });
+      return;
+    }
+    void withCatalog(res, async (client) => {
+      const result = await client.music.search(query, { type });
+      if (type === 'artist') return result.artists?.contents ?? [];
+      return result.songs?.contents ?? result.contents?.flatMap((section) => section.contents ?? []) ?? [];
+    });
+  });
+
+  app.get('/catalog/suggestions', (req, res) => {
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!query || query.length > MAX_CATALOG_QUERY_LENGTH) {
+      res.status(400).json({ error: 'invalid_catalog_query' });
+      return;
+    }
+    void withCatalog(res, async (client) => {
+      const sections = await client.music.getSearchSuggestions(query);
+      return sections.map((section) => ({
+        contents: (section.contents ?? []).map((item) => ({ suggestion: item.suggestion })),
+      }));
+    });
+  });
+
+  app.get('/catalog/artist/:id', (req, res) => {
+    if (!CATALOG_ID_PATTERN.test(req.params.id)) {
+      res.status(400).json({ error: 'invalid_catalog_id' });
+      return;
+    }
+    void withCatalog(res, async (client) => {
+      const page = await client.music.getArtist(req.params.id);
+      let allSongs = [];
+      try {
+        const allSongsPage = await page.getAllSongs();
+        allSongs = allSongsPage?.contents ?? [];
+      } catch (error) {
+        logger.warn?.('[catalog] Could not load the complete artist song list', error);
+      }
+      return { header: page.header, sections: page.sections, allSongs };
+    });
+  });
+
+  app.get('/catalog/collection/:kind/:id', (req, res) => {
+    const { kind, id } = req.params;
+    if ((kind !== 'album' && kind !== 'playlist') || !CATALOG_ID_PATTERN.test(id)) {
+      res.status(400).json({ error: 'invalid_catalog_collection' });
+      return;
+    }
+    void withCatalog(res, async (client) => {
+      let page = kind === 'album'
+        ? await client.music.getAlbum(id)
+        : await client.music.getPlaylist(id);
+      const header = page.header;
+      const items = [];
+      let hasMore = false;
+      while (page) {
+        const contents = kind === 'album' ? page.contents ?? [] : page.items ?? page.contents ?? [];
+        for (const item of contents) {
+          if (items.length === MAX_CATALOG_ITEMS) {
+            hasMore = true;
+            break;
+          }
+          items.push(item);
+        }
+        if (hasMore || !page.has_continuation) break;
+        if (items.length === MAX_CATALOG_ITEMS) {
+          hasMore = true;
+          break;
+        }
+        page = await page.getContinuation();
+      }
+      return { header, contents: items, items, hasMore };
+    });
+  });
+
+  app.get('/catalog/related/:videoId', (req, res) => {
+    if (!VIDEO_ID_PATTERN.test(req.params.videoId)) {
+      res.status(400).json({ error: 'invalid_video_id' });
+      return;
+    }
+    void withCatalog(res, async (client) => {
+      const page = await client.music.getUpNext(req.params.videoId, true);
+      return page.contents ?? [];
+    });
   });
 
   app.get('/download/:videoId', (req, res) => {
