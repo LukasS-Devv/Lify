@@ -1,0 +1,4 @@
+serversetup.sh text eol=lf
+serversetup.bat text eol=crlf
+webbuild.sh text eol=lf
+webbuild.bat text eol=crlf

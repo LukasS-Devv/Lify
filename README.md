@@ -1,5 +1,16 @@
 # Lify
 
+## Preparar e iniciar o backend
+
+Depois de clonar ou baixar este repositorio, execute o instalador na pasta raiz:
+
+- Linux/Termux: `bash serversetup.sh`
+- Windows: `serversetup.bat`
+
+O instalador prepara Node.js 22+, Git e yt-dlp, instala as dependencias do
+backend e inicia o servidor. No Linux, o script suporta Termux e distribuicoes
+Debian/Ubuntu com `apt-get`; no Windows, requer o WinGet.
+
 O Lify é um projeto experimental de aplicativo móvel para descoberta e
 reprodução de música. Busca faixas e metadados no YouTube Music, mantém uma
 biblioteca local e reproduz áudio por meio de um servidor Node.js independente.
@@ -116,6 +127,15 @@ de áudio**. Um servidor personalizado precisa implementar as rotas e encaminhar
 os pedidos `Range` descritos acima.
 
 ### Exportar e publicar a versão web
+
+Para gerar os ficheiros web localmente, execute na raiz do repositório:
+
+- Windows: `webbuild.bat`
+- Linux/macOS: `bash webbuild.sh`
+
+Os scripts instalam as dependências do frontend com `npm ci` e exportam o site
+para `frontend/dist`. No Windows, depois execute `web.bat` para o servir na
+porta 5000. `web.bat` apenas serve a exportação existente; não a compila.
 
 Com o Firebase CLI instalado e autenticado (`firebase login`), na raiz do
 repositório:
