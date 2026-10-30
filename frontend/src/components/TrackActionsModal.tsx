@@ -1,30 +1,33 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import type { PlaylistSummary, Track } from '@/types';
-import { favoritesRepo, getDb, playlistsRepo } from '@/database';
+import { ActivityIndicator, Platform, ScrollView, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { useRouter } from 'expo-router';
+import type { Track } from '@/types';
+import { favoritesRepo, getDb } from '@/database';
 import {
   getTrackDownloadState, isDownloadCancelled, removeTrackDownload, startTrackDownload,
   type DownloadProgress, type TrackDownloadState, type TrackDownloadTask,
 } from '@/features/downloads';
 import { toggleFavoriteWithFeedback } from '@/features/favorites/favoriteFeedback';
 import { addToQueueEnd, addToQueueNext } from '@/services/audio/controller';
+import { catalog } from '@/services/catalog';
 import { t, useTranslation } from '@/i18n';
-import { colors, font, radius, spacing } from '@/theme/tokens';
-import { Cover } from './Cover';
-import { Icon, type IconName } from './Icon';
-import { ContextMenu, Dialog } from './Overlays';
-import { Button } from './Button';
+import { layout, spacing } from '@/theme/tokens';
+import { ContextMenu } from './Overlays';
+import { ConfirmDialog, SheetDivider, SheetHeader, SheetRow, showToast } from './overlay';
+import { PlaylistPickerModal } from './PlaylistPickerModal';
 
-/** Menu de ações de uma faixa: curtir, fila, adicionar a playlist. */
-export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSleepTimer, showIcons = true, position }: {
-  track: Track | null; onClose: () => void; onRemoveFromPlaylist?: (t: Track) => void; onSleepTimer?: () => void; showIcons?: boolean; position?: { x: number; y: number };
+/** Menu de ações de uma faixa: favoritos, fila, catálogo e partilha. */
+export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, position }: {
+  track: Track | null; onClose: () => void; onRemoveFromPlaylist?: (t: Track) => void; showIcons?: boolean; position?: { x: number; y: number };
 }) {
   useTranslation();
+  const { width, height } = useWindowDimensions();
+  const router = useRouter();
+  const mobile = width < layout.desktopBreakpoint;
+  const artistName = track?.artist.split(',')[0].trim() ?? '';
   const [fav, setFav] = useState(false);
-  const [lists, setLists] = useState<PlaylistSummary[]>([]);
   const [showLists, setShowLists] = useState(false);
-  const [confirmingRemove, setConfirmingRemove] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'removeDownload' | 'cancelDownload' | 'removeFromPlaylist' | null>(null);
   const [downloadState, setDownloadState] = useState<TrackDownloadState['status']>('none');
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [downloadBusy, setDownloadBusy] = useState(false);
@@ -32,7 +35,8 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
 
   useEffect(() => {
     if (!track) return;
-    setShowLists(false); setMsg(null);
+    setShowLists(false);
+    setConfirmAction(null);
     setDownloadState('none');
     setDownloadProgress(null);
     setDownloadBusy(false);
@@ -40,16 +44,16 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
     (async () => {
       const db = await getDb();
       const favorite = await favoritesRepo.isFavorite(db, track.id);
-      const playlists = await playlistsRepo.listPlaylists(db);
       if (!active) return;
       setFav(favorite);
-      setLists(playlists);
       if (track.source === 'youtube') {
         const state = await getTrackDownloadState(track.id);
         if (active) setDownloadState(state.status);
       }
     })().catch((error: unknown) => {
-      if (active) setMsg(error instanceof Error ? error.message : t('common.error'));
+      if (active) {
+        showToast(error instanceof Error ? error.message : t('common.error'), { icon: 'warning-outline' });
+      }
     });
     return () => {
       active = false;
@@ -60,31 +64,43 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
 
   if (!track) return null;
 
-  const run = async (fn: () => Promise<string | void> | string | void) => {
+  const run = async (fn: () => Promise<string | void> | string | void, successMessage?: string) => {
     try {
       const m = await fn();
-      if (m) setMsg(m);
-      else onClose();
+      if (m) {
+        showToast(m, { icon: 'warning-outline' });
+        return;
+      }
+      if (successMessage) showToast(successMessage);
+      onClose();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : t('common.error'));
+      showToast(e instanceof Error ? e.message : t('common.error'), { icon: 'warning-outline' });
     }
   };
 
-  const confirmRemoveDownload = () => {
-    if (downloadBusy) return;
-    setConfirmingRemove(true);
-  };
-
-  const removeDownload = () => void run(async () => {
+  const confirmDestructiveAction = () => {
+    const action = confirmAction;
+    setConfirmAction(null);
+    if (!track || !action) return;
+    if (action === 'cancelDownload') {
+      downloadTask.current?.cancel();
+      return;
+    }
+    if (action === 'removeFromPlaylist') {
+      onRemoveFromPlaylist?.(track);
+      onClose();
+      return;
+    }
+    void run(async () => {
       await removeTrackDownload(track.id);
       setDownloadState('none');
-      return t('actions.downloadRemoved');
-    });
+    }, t('actions.downloadRemoved'));
+  };
 
   const downloadOrRemove = async () => {
     if (downloadBusy) return;
     if (downloadState === 'available') {
-      confirmRemoveDownload();
+      setConfirmAction('removeDownload');
       return;
     }
 
@@ -95,11 +111,12 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
       downloadTask.current = task;
       await task.promise;
       setDownloadState('available');
-      setMsg(t('actions.downloadComplete'));
+      showToast(t('actions.downloadComplete'));
     } catch (error) {
-      setMsg(isDownloadCancelled(error)
-        ? t('downloads.cancelled')
-        : error instanceof Error ? error.message : t('common.error'));
+      showToast(
+        isDownloadCancelled(error) ? t('downloads.cancelled') : error instanceof Error ? error.message : t('common.error'),
+        { icon: isDownloadCancelled(error) ? 'checkmark-circle-outline' : 'warning-outline' },
+      );
     } finally {
       downloadTask.current = null;
       setDownloadBusy(false);
@@ -107,121 +124,156 @@ export function TrackActionsModal({ track, onClose, onRemoveFromPlaylist, onSlee
     }
   };
 
+  const openArtist = () => {
+    if (!artistName) return;
+    router.push({ pathname: '/artist/[id]', params: { id: 'search', name: artistName } });
+  };
+
+  const openAlbum = async () => {
+    if (!track || !track.album || !artistName) return t('actions.albumNotFound');
+    const albumTitle = track.album;
+    const artists = await catalog.searchArtists(artistName);
+    const matches = artists.filter((artist) => normalizeTitle(artist.name) === normalizeTitle(artistName));
+    if (matches.length !== 1) return t('actions.albumNotFound');
+    const profile = await catalog.getArtist(matches[0].id);
+    const collections = [...profile.albums, ...profile.singles, ...profile.eps];
+    const album = collections.find((item) => normalizeTitle(item.title) === normalizeTitle(albumTitle));
+    if (!album) return t('actions.albumNotFound');
+    router.push({ pathname: '/collection/[id]', params: { id: album.id, kind: 'album' } });
+  };
+
+  const shareTrack = async () => {
+    const url = track.source === 'youtube'
+      ? `https://www.youtube.com/watch?v=${encodeURIComponent(track.sourceId)}`
+      : undefined;
+    const text = `${track.title} — ${track.artist}`;
+    if (Platform.OS === 'web') {
+      if (typeof navigator.share === 'function') {
+        await navigator.share({ title: track.title, text, ...(url ? { url } : {}) });
+        return;
+      }
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url ?? text);
+        showToast(t('actions.linkCopied'));
+        return;
+      }
+      throw new Error(t('actions.shareUnavailable'));
+    }
+    await Share.share({ title: track.title, message: url ? `${text}\n${url}` : text, ...(url ? { url } : {}) });
+  };
+
   return (
     <>
-      <ContextMenu visible onClose={onClose} title={showLists ? t('actions.addToPlaylist') : undefined} position={position}>
-        <View style={s.head}>
-          <Cover uri={track.artworkUrl} size={56} />
-          <View style={{ flex: 1 }}>
-            <Text numberOfLines={1} style={s.title}>{track.title}</Text>
-            <Text numberOfLines={1} style={s.sub}>{track.artist}</Text>
-          </View>
-        </View>
-        {msg ? <Text style={s.msg}>{msg}</Text> : null}
-        {downloadState === 'invalid' ? <Text style={s.invalid}>{t('downloads.invalid')}</Text> : null}
-        {downloadBusy ? (
-          <View style={s.downloadStatus}>
-            <Text style={s.sub}>
-              {downloadProgress?.fraction === null || downloadProgress?.fraction === undefined
-                ? t('downloads.inProgress')
-                : `${t('downloads.inProgress')} · ${Math.round(downloadProgress.fraction * 100)}%`}
-            </Text>
-            <View style={s.progressTrack}>
-              <View style={[s.progressFill, { width: `${Math.round((downloadProgress?.fraction ?? 0) * 100)}%` }]} />
-            </View>
-          </View>
-        ) : null}
+      <ContextMenu
+        visible={!showLists}
+        onClose={onClose}
+        position={position}
+      >
+        <SheetHeader
+          title={track.title}
+          subtitle={track.artist}
+          artworkUrl={track.artworkUrl}
+        />
 
-        {showLists ? (
-          <ScrollView style={s.list}>
-            {lists.length === 0 ? <Text style={s.sub}>{t('actions.noPlaylists')}</Text> : null}
-            {lists.map((p) => (
-              <Item key={p.id} icon="list" showIcon={showIcons} label={p.name} onPress={() => run(async () => {
-                const added = await playlistsRepo.addTrackToPlaylist(await getDb(), p.id, track);
-                return added ? t('actions.addedTo', { name: p.name }) : t('actions.alreadyIn', { name: p.name });
-              })} />
-            ))}
-          </ScrollView>
-        ) : (
-          <>
-            <Item icon={fav ? 'heart' : 'heart-outline'} showIcon={showIcons} label={fav ? t('actions.unlike') : t('actions.like')} onPress={() => run(async () => {
-              const now = await toggleFavoriteWithFeedback(track);
-              setFav(now);
-              return now ? undefined : t('actions.unliked');
-            })} />
-            <Item icon="add-circle-outline" showIcon={showIcons} label={t('actions.addToPlaylist')} onPress={() => setShowLists(true)} />
-            <View style={s.divider} />
-            <Item icon="play-forward-outline" showIcon={showIcons} label={t('actions.playNext')} onPress={() => run(() => { addToQueueNext(track); return t('actions.queued'); })} />
-            <Item icon="list-outline" showIcon={showIcons} label={t('actions.addToQueue')} onPress={() => run(() => { addToQueueEnd([track]); return t('actions.queued'); })} />
-            <View style={s.divider} />
-            {track.source === 'youtube' && !downloadBusy ? (
-              <Item
-                icon={downloadState === 'available' ? 'checkmark-circle-outline' : 'download-outline'}
-                showIcon={showIcons}
-                label={downloadState === 'available' ? t('actions.downloaded') : t('actions.download')}
-                positive={downloadState === 'available'}
-                onPress={() => void downloadOrRemove()}
+        <ScrollView style={[s.actionList, mobile && { maxHeight: Math.max(220, height - 220) }]} bounces={false}>
+            <View>
+              <SheetRow
+                icon={fav ? 'heart' : 'heart-outline'}
+                label={fav ? t('actions.unlike') : t('actions.like')}
+                selected={fav}
+                onPress={() => void run(async () => {
+                  const now = await toggleFavoriteWithFeedback(track);
+                  setFav(now);
+                  if (!now) showToast(t('actions.unliked'));
+                })}
               />
-            ) : null}
-            {downloadBusy ? (
-              <Item icon="close-circle-outline" showIcon={showIcons} label={t('downloads.cancel')} danger
-                onPress={() => downloadTask.current?.cancel()} />
-            ) : null}
-            {track.source === 'youtube' && downloadState === 'invalid' && !downloadBusy ? (
-              <Item icon="trash-outline" showIcon={showIcons} label={t('downloads.removeRecord')} danger
-                onPress={confirmRemoveDownload} />
-            ) : null}
-            {onSleepTimer ? <Item icon="timer-outline" showIcon={showIcons} label={t('player.sleepTimer.open')} onPress={onSleepTimer} /> : null}
-            {onRemoveFromPlaylist ? (
+              <SheetRow icon="albums-outline" label={t('actions.addToPlaylist')} onPress={() => setShowLists(true)} />
+            </View>
+            <SheetDivider />
+            <View>
+              <SheetRow icon="play-forward-outline" label={t('actions.playNext')} onPress={() => void run(() => addToQueueNext(track), t('actions.queued'))} />
+              <SheetRow icon="list-outline" label={t('actions.addToQueue')} onPress={() => void run(() => addToQueueEnd([track]), t('actions.queued'))} />
+            </View>
+            {track.source === 'youtube' ? (
               <>
-              <View style={s.divider} />
-              <Item icon="trash-outline" showIcon={showIcons} label={t('actions.removeFromPlaylist')} danger onPress={() => { onRemoveFromPlaylist(track); onClose(); }} />
+                <SheetDivider />
+                <View>
+                  {downloadBusy ? (
+                    <>
+                      <SheetRow
+                        icon="download-outline"
+                        label={t('downloads.inProgress')}
+                        subtitle={downloadProgress?.fraction == null ? t('common.loading') : `${Math.round(downloadProgress.fraction * 100)}%`}
+                        right={downloadProgress?.fraction == null ? <ActivityIndicator size="small" color="#C6E27A" /> : (
+                          <View style={s.progressTrack}>
+                            <View style={[s.progressFill, { width: `${Math.round(downloadProgress.fraction * 100)}%` }]} />
+                          </View>
+                        )}
+                        disabled
+                      />
+                      <SheetRow label={t('downloads.cancel')} icon="close-circle-outline" destructive onPress={() => setConfirmAction('cancelDownload')} />
+                    </>
+                  ) : (
+                    <SheetRow
+                      icon={downloadState === 'available' ? 'checkmark-circle-outline' : 'download-outline'}
+                      label={downloadState === 'available' ? t('actions.downloaded') : t('actions.download')}
+                      selected={downloadState === 'available'}
+                      subtitle={downloadState === 'invalid' ? t('downloads.invalid') : undefined}
+                      onPress={() => void downloadOrRemove()}
+                    />
+                  )}
+                  {downloadState === 'invalid' && !downloadBusy ? (
+                    <SheetRow label={t('downloads.removeRecord')} icon="trash-outline" destructive onPress={() => setConfirmAction('removeDownload')} />
+                  ) : null}
+                </View>
               </>
             ) : null}
-          </>
-        )}
+            <SheetDivider />
+            <View>
+              {artistName ? <SheetRow icon="person-outline" label={t('actions.goToArtist')} onPress={() => { openArtist(); onClose(); }} /> : null}
+              {track.source === 'youtube' && track.album ? (
+                <SheetRow icon="albums-outline" label={t('actions.goToAlbum')} onPress={() => void run(openAlbum)} />
+              ) : null}
+              {track.source === 'youtube' ? (
+                <SheetRow icon="share-outline" label={t('actions.share')} onPress={() => void run(shareTrack)} />
+              ) : null}
+              {onRemoveFromPlaylist ? (
+                <SheetRow icon="trash-outline" label={t('actions.removeFromPlaylist')} destructive onPress={() => setConfirmAction('removeFromPlaylist')} />
+              ) : null}
+            </View>
+        </ScrollView>
       </ContextMenu>
-      <Dialog
-        visible={confirmingRemove}
-        onClose={() => setConfirmingRemove(false)}
-        title={t('downloads.removeConfirmTitle')}
-      >
-        <Text style={s.confirmMessage}>{t('downloads.removeConfirmMessage')}</Text>
-        <View style={s.actions}>
-          <Button label={t('common.no')} variant="secondary" onPress={() => setConfirmingRemove(false)} />
-          <Button label={t('common.yes')} variant="danger" onPress={() => {
-            setConfirmingRemove(false);
-            removeDownload();
-          }} />
-        </View>
-      </Dialog>
+      {showLists ? (
+        <PlaylistPickerModal
+          track={track}
+          title={t('actions.addToPlaylist')}
+          subtitle={track.artist}
+          artworkUrl={track.artworkUrl}
+          onBack={() => setShowLists(false)}
+          onCancel={() => setShowLists(false)}
+          onConfirm={() => { setShowLists(false); onClose(); }}
+          onCreatePlaylist={() => { setShowLists(false); onClose(); router.push('/playlists'); }}
+        />
+      ) : null}
+      <ConfirmDialog
+        visible={confirmAction !== null}
+        title={confirmAction === 'cancelDownload' ? t('downloads.cancelConfirmTitle') : confirmAction === 'removeFromPlaylist' ? t('actions.removeTrackTitle') : t('downloads.removeConfirmTitle')}
+        message={confirmAction === 'cancelDownload' ? t('downloads.cancelConfirmMessage') : confirmAction === 'removeFromPlaylist' ? t('actions.removeTrackMessage') : t('downloads.removeConfirmMessage')}
+        cancelLabel={t('common.cancel')}
+        confirmLabel={confirmAction === 'cancelDownload' ? t('downloads.cancel') : t('common.confirm')}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={confirmDestructiveAction}
+      />
     </>
   );
 }
 
-function Item({ icon, label, onPress, danger, positive, muted, showIcon = true }: { icon: IconName; label: string; onPress: () => void; danger?: boolean; positive?: boolean; muted?: boolean; showIcon?: boolean }) {
-  const color = danger ? colors.danger : positive ? colors.accent : muted ? colors.textMuted : colors.text;
-  return (
-    <Pressable accessibilityRole="menuitem" onPress={onPress} style={s.item}>
-      {showIcon ? <Icon name={icon} size={18} color={color} /> : null}
-      <Text style={[s.itemText, { color }]}>{label}</Text>
-    </Pressable>
-  );
+function normalizeTitle(value: string): string {
+  return value.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').toLocaleLowerCase();
 }
 
 const s = StyleSheet.create({
-  head: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingBottom: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  title: { color: colors.text, fontSize: font.lg, fontWeight: '700' },
-  sub: { color: colors.textMuted, fontSize: font.md },
-  msg: { color: colors.accent, marginBottom: spacing.sm, fontSize: font.md },
-  invalid: { color: colors.danger, marginBottom: spacing.sm, fontSize: font.sm },
-  downloadStatus: { gap: spacing.xs, marginBottom: spacing.sm },
-  progressTrack: { height: 4, borderRadius: 2, backgroundColor: colors.surface, overflow: 'hidden' },
-  progressFill: { height: 4, backgroundColor: colors.accent },
-  list: { maxHeight: 280 },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginVertical: spacing.xs },
-  item: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.sm, borderRadius: radius.sm },
-  itemText: { fontSize: font.md },
-  confirmMessage: { color: colors.textMuted, fontSize: font.md },
-  actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm },
+  actionList: { flexShrink: 1, marginTop: spacing.sm },
+  progressTrack: { width: 64, height: 4, borderRadius: 2, backgroundColor: '#333333', overflow: 'hidden' },
+  progressFill: { height: 4, backgroundColor: '#C6E27A' },
 });

@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import type { PlaylistSummary, Track } from '@/types';
 import { getDb, playlistsRepo } from '@/database';
 import { t, useTranslation } from '@/i18n';
-import { colors, font, radius, spacing } from '@/theme/tokens';
+import { colors, font, spacing } from '@/theme/tokens';
 import { Button } from './Button';
-import { Icon } from './Icon';
+import { Cover } from './Cover';
 import { PickerModal } from './Overlays';
+import { SheetRow, showToast } from './overlay';
 
 export function AddTracksToPlaylistModal({ tracks, onClose }: {
   tracks: Track[];
@@ -18,8 +19,6 @@ export function AddTracksToPlaylistModal({ tracks, onClose }: {
   const [playlists, setPlaylists] = useState<PlaylistSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [addingId, setAddingId] = useState<number | null>(null);
-  const [result, setResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const filteredPlaylists = useMemo(
     () => playlists.filter((playlist) => playlist.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())),
@@ -34,7 +33,7 @@ export function AddTracksToPlaylistModal({ tracks, onClose }: {
         if (active) setPlaylists(items);
       })
       .catch((e: unknown) => {
-        if (active) setError(e instanceof Error ? e.message : t('common.error'));
+        if (active) showToast(e instanceof Error ? e.message : t('common.error'), { icon: 'warning-outline' });
       })
       .finally(() => {
         if (active) setLoaded(true);
@@ -45,12 +44,12 @@ export function AddTracksToPlaylistModal({ tracks, onClose }: {
   const addToPlaylist = async (playlist: PlaylistSummary) => {
     if (addingId !== null) return;
     setAddingId(playlist.id);
-    setError(null);
     try {
       const added = await playlistsRepo.addTracksToPlaylist(await getDb(), playlist.id, tracks);
-      setResult(t('artist.tracksAdded', { added, total: tracks.length, playlist: playlist.name }));
+      showToast(t('artist.tracksAdded', { added, total: tracks.length, playlist: playlist.name }));
+      onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('common.error'));
+      showToast(e instanceof Error ? e.message : t('common.error'), { icon: 'warning-outline' });
     } finally {
       setAddingId(null);
     }
@@ -67,8 +66,8 @@ export function AddTracksToPlaylistModal({ tracks, onClose }: {
       onClose={close}
       busy={busy}
       title={t('artist.addAllTracks')}
-      searchValue={query}
-      onSearchChange={setQuery}
+      searchValue={playlists.length > 8 ? query : undefined}
+      onSearchChange={playlists.length > 8 ? setQuery : undefined}
       searchPlaceholder={t('search.placeholder')}
       footer={(
         <View style={s.footer}>
@@ -81,51 +80,39 @@ export function AddTracksToPlaylistModal({ tracks, onClose }: {
               router.push('/playlists');
             }}
             disabled={busy}
+            style={s.footerButton}
           />
-          <Button label={result ? t('common.close') : t('common.cancel')} variant="secondary" onPress={close} disabled={busy} />
+          <Button label={t('common.cancel')} variant="secondary" onPress={close} disabled={busy} style={s.footerButton} />
         </View>
       )}
     >
         <Text style={s.hint}>{t('artist.choosePlaylist')}</Text>
 
-        {result ? (
-          <Text accessibilityRole="alert" style={s.result}>{result}</Text>
-        ) : (
-          <View style={s.list}>
-            {!loaded ? <Text style={s.hint}>{t('common.loading')}</Text> : null}
-            {loaded && playlists.length === 0 ? <Text style={s.hint}>{t('actions.noPlaylists')}</Text> : null}
-            {loaded && playlists.length > 0 && filteredPlaylists.length === 0 ? <Text style={s.hint}>{t('search.noResults', { query })}</Text> : null}
-            {filteredPlaylists.map((playlist) => (
-              <Pressable
-                key={playlist.id}
-                accessibilityRole="button"
-                disabled={busy}
-                onPress={() => void addToPlaylist(playlist)}
-                style={({ pressed }) => [s.row, (pressed || busy) && s.pressed]}
-              >
-                <Text numberOfLines={1} style={s.rowText}>{playlist.name}</Text>
-                {addingId === playlist.id
-                  ? <Text style={s.rowAction}>{t('common.loading')}</Text>
-                  : <Icon name="chevron-forward" size={20} color={colors.textMuted} />}
-              </Pressable>
-            ))}
-          </View>
-        )}
-
-        {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+        <View style={s.list}>
+          {!loaded ? <ActivityIndicator color="#C6E27A" style={s.loading} /> : null}
+          {loaded && playlists.length === 0 ? <Text style={s.hint}>{t('actions.noPlaylists')}</Text> : null}
+          {loaded && playlists.length > 0 && filteredPlaylists.length === 0 ? <Text style={s.hint}>{t('search.noResults', { query })}</Text> : null}
+          {filteredPlaylists.map((playlist) => (
+            <SheetRow
+              key={playlist.id}
+              label={playlist.name}
+              subtitle={t('library.playlistMeta', { count: playlist.trackCount })}
+              leading={<Cover uri={playlist.customCoverUrl ?? playlist.coverUrl} size={48} radius={8} seed={playlist.name} icon="list" />}
+              right={addingId === playlist.id ? <ActivityIndicator size="small" color="#C6E27A" /> : undefined}
+              disabled={busy}
+              onPress={() => void addToPlaylist(playlist)}
+            />
+          ))}
+        </View>
     </PickerModal>
   );
 }
 
 const s = StyleSheet.create({
   hint: { color: colors.textMuted, fontSize: font.md },
-  list: { maxHeight: 360 },
-  row: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md, paddingHorizontal: spacing.sm, borderRadius: radius.sm },
-  rowText: { flex: 1, color: colors.text, fontSize: font.md },
-  rowAction: { color: colors.textMuted, fontSize: font.sm },
-  result: { color: colors.text, fontSize: font.md, lineHeight: 22 },
-  error: { color: colors.danger, fontSize: font.sm },
+  list: { maxHeight: 360, flexShrink: 1 },
+  loading: { paddingVertical: spacing.lg },
   actions: { flexDirection: 'row', justifyContent: 'flex-end' },
-  footer: { gap: spacing.sm },
-  pressed: { opacity: 0.7 },
+  footer: { gap: spacing.md },
+  footerButton: { width: '100%', minHeight: 48, borderRadius: 8 },
 });

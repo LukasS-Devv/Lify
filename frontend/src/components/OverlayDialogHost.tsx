@@ -92,6 +92,7 @@ export function OverlayDialogHost() {
                 label={choice.label}
                 variant={choice.destructive ? 'danger' : choice.value === 'cancel' ? 'secondary' : 'primary'}
                 onPress={() => close(choice.value)}
+                style={s.choiceButton}
               />
             ))}
           </View>
@@ -103,5 +104,6 @@ export function OverlayDialogHost() {
 
 const s = StyleSheet.create({
   message: { color: colors.textMuted, fontSize: font.md, lineHeight: 20 },
-  actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm },
+  actions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.sm },
+  choiceButton: { flex: 1, minHeight: 48, borderRadius: 8 },
 });

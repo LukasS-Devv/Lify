@@ -9,7 +9,6 @@ import { t, useTranslation } from '@/i18n';
 import { playQueue } from '@/services/audio/controller';
 import { selectCurrentTrack, usePlayerStore } from '@/services/audio/store';
 import type { Track } from '@/types';
-import { shuffled } from '@/utils/array';
 import { gradientFor } from '@/utils/color';
 import { formatTotalDuration } from '@/utils/track';
 import { colors, font, layout, spacing } from '@/theme/tokens';
@@ -45,7 +44,7 @@ export default function VirtualPlaylistDetail() {
       <Text numberOfLines={2} style={s.title}>{title}</Text>
       <Text style={s.meta}>{meta}</Text>
       <View style={s.actions}>
-        <IconButton icon="shuffle" size={26} label={t('common.shuffle')} disabled={!tracks.length} onPress={() => playQueue(shuffled(tracks), 0)} />
+        <IconButton icon="shuffle" size={26} label={t('common.shuffle')} disabled={!tracks.length} onPress={() => playQueue(tracks, 0, true)} />
         <IconButton icon="play" size={30} label={t('common.play')} disabled={!tracks.length} color={colors.accent} onPress={() => tracks.length && playQueue(tracks, 0)} />
       </View>
     </LinearGradient>

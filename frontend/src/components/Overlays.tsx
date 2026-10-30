@@ -1,7 +1,6 @@
-import { createElement, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createElement, useEffect, useRef, type ReactNode } from 'react';
 import {
   Modal,
-  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -14,7 +13,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, font, overlayTokens, radius, spacing } from '@/theme/tokens';
+import { colors, font, layout, overlayTokens, radius, spacing } from '@/theme/tokens';
 import { IconButton } from './IconButton';
 
 const WEB_STYLE_ID = 'lify-overlay-global-styles';
@@ -27,8 +26,10 @@ function installOverlayStyles(): () => void {
     style.id = WEB_STYLE_ID;
     style.textContent = `
       :root { --overlay-bg: ${overlayTokens.background}; --overlay-border: 1px solid ${overlayTokens.border}; --overlay-shadow: ${overlayTokens.shadow}; --overlay-radius: ${radius.md}px; --dialog-radius: ${overlayTokens.dialogRadius}px; --sheet-radius: ${overlayTokens.sheetRadius}px; --scrim: ${overlayTokens.scrim}; --item-height: ${overlayTokens.itemHeight}px; --item-radius: ${overlayTokens.itemRadius}px; --item-hover: ${overlayTokens.itemHover}; --motion-in: ${overlayTokens.motionIn}; --motion-out: ${overlayTokens.motionOut}; --accent: ${colors.accent}; --danger: ${colors.danger}; }
-      [id$="-scrim"] { background: var(--scrim); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
-      .lify-overlay-surface { border: var(--overlay-border); box-shadow: var(--overlay-shadow); animation: lify-overlay-in var(--motion-in) both; }
+      [id$="-scrim"] { background: var(--scrim); }
+      .lify-overlay-surface { box-sizing: border-box; padding: 20px 24px; border: var(--overlay-border); box-shadow: var(--overlay-shadow); animation: lify-overlay-in var(--motion-in) both; }
+      .lify-overlay-surface input { box-sizing: border-box; }
+      .lify-overlay-surface input:focus { outline: none; border-color: ${colors.accent}; }
       @keyframes lify-overlay-in { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
       @media (prefers-reduced-motion: reduce) { .lify-overlay-surface { animation: lify-overlay-fade 140ms ease-out both; } @keyframes lify-overlay-fade { from { opacity: 0; } to { opacity: 1; } } }
       .lify-overlay-item { min-height: var(--item-height); border-radius: var(--item-radius); }
@@ -66,22 +67,12 @@ function OverlaySurface({
 }) {
   const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const desktop = Platform.OS === 'web' && viewportWidth >= 1024;
-  const isMobileSheet = !desktop && (variant === 'sheet' || variant === 'picker' || variant === 'menu' || variant === 'dialog');
+  const desktop = viewportWidth >= layout.desktopBreakpoint;
+  const isMobileSheet = !desktop && (variant === 'sheet' || variant === 'picker' || variant === 'menu');
   const rootId = useRef(`lify-overlay-${Math.random().toString(36).slice(2)}`).current;
   const titleId = `${rootId}-title`;
   const closeRef = useRef(onClose);
-  const [dragY, setDragY] = useState(0);
   closeRef.current = onClose;
-  const sheetPanResponder = useRef(PanResponder.create({
-    onMoveShouldSetPanResponder: (_event, gesture) => gesture.dy > 8,
-    onPanResponderMove: (_event, gesture) => setDragY(Math.max(0, gesture.dy)),
-    onPanResponderRelease: (_event, gesture) => {
-      if (gesture.dy > 80) closeRef.current();
-      setDragY(0);
-    },
-    onPanResponderTerminate: () => setDragY(0),
-  })).current;
 
   useEffect(() => {
     if (!visible || Platform.OS !== 'web') return;
@@ -149,8 +140,8 @@ function OverlaySurface({
   }, [busy, rootId, visible]);
 
   if (!visible) return null;
-  const surfaceWidth = width ?? (variant === 'menu' ? 260 : variant === 'picker' ? 420 : variant === 'dialog' ? 400 : 480);
-  const anchored = desktop && variant === 'menu' && position;
+  const surfaceWidth = width ?? (variant === 'menu' ? 280 : variant === 'picker' ? 420 : variant === 'dialog' ? 400 : 480);
+  const anchored = Platform.OS === 'web' && desktop && variant === 'menu' && position;
   const left = anchored
     ? Math.max(spacing.md, Math.min(position.x - surfaceWidth, viewportWidth - surfaceWidth - spacing.md))
     : undefined;
@@ -165,21 +156,20 @@ function OverlaySurface({
     variant === 'menu' && (desktop ? s.menu : s.sheet),
     variant === 'fullscreen' && s.fullscreen,
     desktop && !anchored && { width: Math.min(surfaceWidth, viewportWidth - spacing.lg * 2) },
+    !desktop && variant === 'dialog' && { width: Math.min(surfaceWidth, viewportWidth - spacing.xl * 2) },
     anchored && { position: 'absolute' as const, left, top },
-    isMobileSheet && dragY > 0 && { transform: [{ translateY: dragY }] },
     { paddingBottom: isMobileSheet ? Math.max(insets.bottom, spacing.md) + spacing.md : spacing.lg },
-    { backgroundColor: Platform.OS === 'web' ? overlayTokens.background : colors.surfaceAlt },
+    { backgroundColor: overlayTokens.background },
     variant === 'dialog' && { borderRadius: overlayTokens.dialogRadius },
     isMobileSheet && { borderTopLeftRadius: overlayTokens.sheetRadius, borderTopRightRadius: overlayTokens.sheetRadius },
     contentStyle,
   ];
   const surfaceContent = (
     <>
-      {isMobileSheet ? <View accessibilityElementsHidden style={s.handle} {...sheetPanResponder.panHandlers} /> : null}
       {title ? (
         <View style={s.header}>
           <Text nativeID={titleId} accessibilityRole="header" style={s.title}>{title}</Text>
-          {desktop && (variant === 'dialog' || variant === 'picker') ? (
+          {desktop && variant === 'picker' ? (
             <IconButton icon="close" label={closeLabel} size={18} onPress={onClose} />
           ) : null}
         </View>
@@ -299,17 +289,16 @@ const s = StyleSheet.create({
   scrim: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.overlay },
   scrimColumn: { justifyContent: 'flex-end' },
   scrimPressable: { backgroundColor: 'transparent' },
-  surface: { width: '100%', maxHeight: '90%', overflow: 'hidden', gap: spacing.md, padding: spacing.lg, backgroundColor: colors.surfaceAlt, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, elevation: 16 },
+  surface: { width: '100%', maxHeight: '90%', overflow: 'hidden', gap: spacing.md, paddingVertical: 20, paddingHorizontal: spacing.lg, backgroundColor: overlayTokens.background, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, elevation: 16 },
   centered: { alignSelf: 'center', borderRadius: overlayTokens.dialogRadius },
   sheet: { width: '100%', maxWidth: 560, maxHeight: '88%', marginTop: 'auto', borderTopLeftRadius: overlayTokens.sheetRadius, borderTopRightRadius: overlayTokens.sheetRadius, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
   picker: { maxHeight: '70%' },
-  menu: { width: 260, maxWidth: 260, padding: spacing.sm },
+  menu: { width: 280, maxWidth: 280, padding: spacing.md },
   fullscreen: { flex: 1, width: '100%', maxWidth: '100%', maxHeight: '100%', height: '100%', margin: 0, borderRadius: 0 },
-  handle: { width: 36, height: 4, alignSelf: 'center', borderRadius: radius.pill, backgroundColor: colors.textMuted, opacity: 0.6 },
-  header: { minHeight: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  header: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md, marginBottom: spacing.xs },
   title: { flex: 1, color: colors.text, fontSize: font.lg, fontWeight: '600' },
-  search: { height: 40, paddingHorizontal: spacing.md, color: colors.text, backgroundColor: colors.surface, borderRadius: radius.md },
+  search: { height: 48, paddingHorizontal: spacing.md, color: colors.text, backgroundColor: colors.surface, borderRadius: radius.md },
   pickerList: { flexShrink: 1 },
-  footer: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: spacing.sm },
+  footer: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: spacing.md, marginTop: spacing.xs },
   toast: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, backgroundColor: colors.surfaceAlt, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: radius.md, elevation: 8 },
 });

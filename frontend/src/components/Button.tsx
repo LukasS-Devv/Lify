@@ -1,9 +1,9 @@
-import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, type StyleProp, type ViewStyle } from 'react-native';
 import { colors, font, radius, spacing } from '@/theme/tokens';
 import { Icon, type IconName } from './Icon';
 
-export function Button({ label, onPress, variant = 'primary', disabled, icon, loading }: {
-  label: string; onPress: () => void; variant?: 'primary' | 'secondary' | 'danger'; disabled?: boolean; icon?: IconName; loading?: boolean;
+export function Button({ label, onPress, variant = 'primary', disabled, icon, loading, style }: {
+  label: string; onPress: () => void; variant?: 'primary' | 'secondary' | 'danger'; disabled?: boolean; icon?: IconName; loading?: boolean; style?: StyleProp<ViewStyle>;
 }) {
   const fg = variant === 'primary' ? colors.accentText : colors.text;
   return (
@@ -11,7 +11,7 @@ export function Button({ label, onPress, variant = 'primary', disabled, icon, lo
       accessibilityRole="button"
       onPress={onPress}
       disabled={disabled || loading}
-      style={({ pressed }) => [s.base, s[variant], (pressed || disabled) && { opacity: 0.6 }]}
+      style={({ pressed }) => [s.base, s[variant], style, (pressed || disabled) && { opacity: 0.6 }]}
     >
       {loading ? <ActivityIndicator size="small" color={fg} /> : icon ? <Icon name={icon} size={18} color={fg} /> : null}
       <Text style={[s.label, { color: fg }]}>{label}</Text>

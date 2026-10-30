@@ -94,5 +94,11 @@ const s = StyleSheet.create({
   title: { color: colors.text, fontSize: font.md, fontWeight: '700' },
   sub: { color: 'rgba(255,255,255,0.7)', fontSize: font.sm },
   spinner: { width: 40, alignItems: 'center' },
-  seekSlider: { position: 'absolute', left: spacing.sm, right: spacing.sm, bottom: 0, height: 22 },
+  seekSlider: {
+    position: 'absolute',
+    left: spacing.sm + 44 + spacing.sm,
+    right: spacing.sm + 34 + 40 + 34 + spacing.sm * 3,
+    bottom: 0,
+    height: 22,
+  },
 });

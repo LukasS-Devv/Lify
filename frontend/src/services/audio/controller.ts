@@ -14,8 +14,8 @@ import {
   type TrackDownloadTask,
 } from '@/features/downloads';
 import {
-  currentOf, appendRecommended, dropRecommended, nextIndex, playNext as qPlayNext, prevIndex,
-  enqueue as qEnqueue, removeAt, setQueue, shuffleRest, emptyQueue, shouldFetchRecommendations,
+  currentOf, appendRecommended, moveQueueItem, nextIndex, playNext as qPlayNext, prevIndex,
+  enqueue as qEnqueue, removeAt, setQueue, shuffleRest, shuffleAll, restoreShuffleOrder, emptyQueue, shouldFetchRecommendations,
 } from './queue';
 import { usePlayerStore, type PlayerStatus } from './store';
 import { t as tr } from '@/i18n';
@@ -32,6 +32,7 @@ let queueEndTrackId: string | null = null;
 let lastQueueEndEvent: QueueEndSignature | null = null;
 let nativeOperations: Promise<void> = Promise.resolve();
 let sleepTimer: ReturnType<typeof setTimeout> | null = null;
+let recommendationRequestTrackId: string | null = null;
 
 function serializeNative<T>(operation: () => Promise<T>): Promise<T> {
   const result = nativeOperations.then(operation);
@@ -53,7 +54,7 @@ function expireSleepTimer(endAt: number): void {
   if (store().sleepTimerEndsAt !== endAt || Date.now() < endAt) return;
   if (sleepTimer) clearTimeout(sleepTimer);
   sleepTimer = null;
-  store().set({ sleepTimerEndsAt: null });
+  store().set({ sleepTimerEndsAt: null, sleepTimerPreset: null });
   const token = ++loadToken;
   void serializeNative(async () => {
     if (token === loadToken) await TrackPlayer.pause();
@@ -79,14 +80,20 @@ export function setSleepTimer(minutes: number): void {
   }
   if (sleepTimer) clearTimeout(sleepTimer);
   const endAt = Date.now() + minutes * 60_000;
-  store().set({ sleepTimerEndsAt: endAt });
+  store().set({ sleepTimerEndsAt: endAt, sleepTimerPreset: minutes });
   scheduleSleepTimer(endAt);
+}
+
+export function setSleepTimerAtTrackEnd(): void {
+  if (sleepTimer) clearTimeout(sleepTimer);
+  sleepTimer = null;
+  store().set({ sleepTimerEndsAt: null, sleepTimerPreset: 'trackEnd' });
 }
 
 export function cancelSleepTimer(): void {
   if (sleepTimer) clearTimeout(sleepTimer);
   sleepTimer = null;
-  store().set({ sleepTimerEndsAt: null });
+  store().set({ sleepTimerEndsAt: null, sleepTimerPreset: null });
 }
 
 /* ------------------------------ setup ------------------------------ */
@@ -133,7 +140,10 @@ export function setupAudio(): Promise<void> {
  */
 export async function restoreNativeQueue(): Promise<void> {
   await setupAudio();
-  if (store().queue.items.length > 0) return;
+  if (store().queue.items.length > 0) {
+    requestRecommendationsIfEnabled();
+    return;
+  }
 
   const [nativeItems, index, playback] = await serializeNative(() => Promise.all([
     TrackPlayer.getQueue(),
@@ -148,6 +158,7 @@ export async function restoreNativeQueue(): Promise<void> {
     status: statusFromNative(playback.state),
     error: null,
   });
+  requestRecommendationsIfEnabled();
 }
 
 function nativeToTrack(n: NativeTrack): Track {
@@ -346,25 +357,41 @@ function prefetchNext() {
   if (upcoming) void catalog.prefetch(upcoming);
 }
 
-/** Fila automática: ao tocar a última faixa, anexa relacionadas (não com repeat "all", que repete a playlist). */
+/** Fila automática: anexa sugestões ao fim da playlist, também em repeat "all". */
 async function maybeFillQueue() {
   const { queue, repeat } = store();
-  if (repeat !== 'off') return;
+  if ((repeat !== 'off' && repeat !== 'all') || queue.recStart !== undefined) return;
   const cur = currentOf(queue);
-  if (!cur || cur.source !== 'youtube') return;
-  const related = await catalog.getRelated(cur);
-  const state = store();
-  const now = state.queue;
-  if (state.repeat !== 'off' || currentOf(now)?.id !== cur.id) return; // estado mudou enquanto buscava
-  const known = new Set(now.items.map((t) => t.id));
-  const fresh = related.filter((t) => !known.has(t.id));
-  if (fresh.length) store().set({ queue: appendRecommended(now, fresh) });
+  if (!cur || cur.source !== 'youtube' || recommendationRequestTrackId === cur.id) return;
+  recommendationRequestTrackId = cur.id;
+  try {
+    const related = await catalog.getRelated(cur);
+    const state = store();
+    const now = state.queue;
+    if ((state.repeat !== 'off' && state.repeat !== 'all')
+      || now.recStart !== undefined
+      || currentOf(now)?.id !== cur.id) return;
+    const known = new Set(now.items.map((t) => t.id));
+    const fresh = related.filter((t) => !known.has(t.id));
+    if (fresh.length) store().set({ queue: appendRecommended(now, fresh) });
+  } finally {
+    if (recommendationRequestTrackId === cur.id) recommendationRequestTrackId = null;
+  }
+}
+
+function requestRecommendationsIfEnabled(): void {
+  const { repeat } = store();
+  if (repeat === 'off' || repeat === 'all') void maybeFillQueue().catch(() => {});
 }
 
 /** Toca `tracks` a partir de `startIndex`, substituindo a fila. */
-export async function playQueue(tracks: Track[], startIndex = 0): Promise<void> {
-  const q = setQueue(tracks, startIndex);
-  store().set({ queue: q });
+export async function playQueue(tracks: Track[], startIndex = 0, shuffle?: boolean): Promise<void> {
+  const enabled = shuffle ?? store().shuffle;
+  let q = setQueue(tracks, startIndex);
+  if (shuffle === true) q = shuffleAll(q);
+  else if (enabled) q = shuffleRest(q);
+  store().set({ queue: q, shuffle: enabled });
+  requestRecommendationsIfEnabled();
   const t = currentOf(q);
   if (t) await loadAndPlay(t);
 }
@@ -455,6 +482,7 @@ export async function stop(): Promise<void> {
 export function addToQueueNext(track: Track) {
   const wasEmpty = store().queue.items.length === 0;
   store().set({ queue: qPlayNext(store().queue, track) });
+  requestRecommendationsIfEnabled();
   if (wasEmpty) void loadAndPlay(track);
   else prefetchNext();
 }
@@ -462,6 +490,7 @@ export function addToQueueNext(track: Track) {
 export function addToQueueEnd(tracks: Track[]) {
   const wasEmpty = store().queue.items.length === 0;
   store().set({ queue: qEnqueue(store().queue, tracks) });
+  requestRecommendationsIfEnabled();
   if (wasEmpty) void loadAndPlay(tracks[0]);
   else prefetchNext();
 }
@@ -480,14 +509,27 @@ export async function removeFromQueue(index: number): Promise<void> {
   }
 }
 
-export function shuffleUpcoming() {
-  store().set({ queue: shuffleRest(store().queue) });
+export async function reorderQueue(from: number, to: number): Promise<void> {
+  const queue = store().queue;
+  const nextQueue = moveQueueItem(queue, from, to);
+  if (nextQueue === queue) return;
+  await serializeNative(() => TrackPlayer.move(from, to));
+  store().set({ queue: nextQueue });
+  prefetchNext();
+}
+
+export function toggleShuffle() {
+  const { queue, shuffle } = store();
+  store().set({
+    queue: shuffle ? restoreShuffleOrder(queue) : shuffleRest(queue),
+    shuffle: !shuffle,
+  });
   prefetchNext();
 }
 
 export async function setRepeat(mode: RepeatMode) {
   store().set({ repeat: mode });
-  if (mode !== 'off') store().set({ queue: dropRecommended(store().queue) });
+  requestRecommendationsIfEnabled();
   prefetchNext();
   try { await settingsRepo.saveSetting(await getDb(), 'repeatMode', mode); } catch { /* */ }
 }
@@ -509,6 +551,10 @@ async function onQueueEnded(event: { track: number; position: number }): Promise
     const active = await TrackPlayer.getActiveTrack().catch(() => undefined);
     if (currentOf(store().queue)?.id !== cur.id || (active && String(active.id) !== cur.id)) return;
     lastQueueEndEvent = queueEndSignature(event, Date.now());
+    if (store().sleepTimerPreset === 'trackEnd') {
+      store().set({ sleepTimerEndsAt: null, sleepTimerPreset: null, status: 'paused' });
+      return;
+    }
     if (store().repeat === 'one') {
       try {
         await serializeNative(async () => {

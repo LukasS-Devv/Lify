@@ -9,7 +9,6 @@ import { catalog, type CatalogCollection } from '@/services/catalog';
 import { playQueue } from '@/services/audio/controller';
 import { selectCurrentTrack, usePlayerStore } from '@/services/audio/store';
 import type { Track } from '@/types';
-import { shuffled } from '@/utils/array';
 import { gradientFor } from '@/utils/color';
 import { formatTotalDuration } from '@/utils/track';
 import { colors, font, layout, spacing } from '@/theme/tokens';
@@ -64,7 +63,7 @@ export default function CollectionScreen() {
           size={26}
           label={t('common.shuffle')}
           disabled={!tracks.length}
-          onPress={() => playQueue(shuffled(tracks), 0)}
+          onPress={() => playQueue(tracks, 0, true)}
         />
         <IconButton
           icon="play"

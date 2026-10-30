@@ -10,6 +10,7 @@ export function usePlayer() {
   const error = usePlayerStore((s) => s.error);
   const queue = usePlayerStore((s) => s.queue);
   const repeat = usePlayerStore((s) => s.repeat);
+  const shuffle = usePlayerStore((s) => s.shuffle);
   const favoritesVersion = useFavoriteFeedbackStore((s) => s.favoritesVersion);
   const [favorite, setFavorite] = useState(false);
 
@@ -23,5 +24,5 @@ export function usePlayer() {
     setFavorite(await toggleFavoriteWithFeedback(track));
   };
 
-  return { track, status, error, queue, repeat, favorite, toggleFavorite };
+  return { track, status, error, queue, repeat, shuffle, favorite, toggleFavorite };
 }

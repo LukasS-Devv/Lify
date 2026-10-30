@@ -47,7 +47,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </View>
         </View>
       </View>
-      <MiniPlayer desktop />
+      {pathname !== '/player' ? <MiniPlayer desktop /> : null}
     </View>
   );
 }

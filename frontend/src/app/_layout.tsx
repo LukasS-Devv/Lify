@@ -18,6 +18,7 @@ import { cleanupUnreferencedLocalAudio } from '@/storage/localAudioCleanup';
 import { togglePlay } from '@/services/audio/controller';
 import { usePlayerStore } from '@/services/audio/store';
 import { OverlayDialogHost } from '@/components/OverlayDialogHost';
+import { ToastHost } from '@/components/overlay';
 
 void SplashScreen.preventAutoHideAsync().catch((error: unknown) => {
   console.warn('[startup] Could not keep the native splash visible', error);
@@ -178,6 +179,7 @@ export default function RootLayout() {
             {!desktop && showGlobalBar ? <GlobalBottomBar /> : null}
             {pathname !== '/player' ? <FavoriteToast lifted={showGlobalBar} /> : null}
             <OverlayDialogHost />
+            <ToastHost />
           </>
         ) : null}
         {splashVisible && !error ? (

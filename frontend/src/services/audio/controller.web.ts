@@ -8,7 +8,7 @@ import {
 import {
   appendRecommended,
   currentOf,
-  dropRecommended,
+  moveQueueItem,
   emptyQueue,
   enqueue as qEnqueue,
   nextIndex,
@@ -17,7 +17,10 @@ import {
   removeAt,
   setQueue,
   shuffleRest,
+  shuffleAll,
+  restoreShuffleOrder,
   shouldFetchRecommendations,
+  type QueueState,
 } from './queue';
 import { usePlayerStore } from './store';
 import { t as tr } from '@/i18n';
@@ -29,6 +32,68 @@ let eventsAttached = false;
 let setupPromise: Promise<void> | null = null;
 let loadToken = 0;
 let sleepTimer: ReturnType<typeof setTimeout> | null = null;
+let recommendationRequestTrackId: string | null = null;
+const WEB_PLAYER_STORAGE_KEY = 'lify.webPlayer.v1';
+let restoredPosition = 0;
+let lastPositionPersistAt = 0;
+
+function persistWebQueue(queue = store().queue): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (queue.items.length === 0) {
+      window.localStorage.removeItem(WEB_PLAYER_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(WEB_PLAYER_STORAGE_KEY, JSON.stringify({
+      queue,
+      position: audioElement?.currentTime || restoredPosition,
+    }));
+  } catch {
+    // O armazenamento pode estar indisponível em navegação privada.
+  }
+}
+
+function isTrack(value: unknown): value is Track {
+  if (!value || typeof value !== 'object') return false;
+  const track = value as Partial<Track>;
+  return typeof track.id === 'string'
+    && (track.source === 'youtube' || track.source === 'local')
+    && typeof track.sourceId === 'string'
+    && typeof track.title === 'string'
+    && typeof track.artist === 'string'
+    && (typeof track.album === 'string' || track.album === null)
+    && (typeof track.durationSec === 'number' || track.durationSec === null)
+    && typeof track.artworkUrl === 'string';
+}
+
+function restoreWebQueue(): void {
+  if (typeof window === 'undefined' || store().queue.items.length > 0) return;
+  try {
+    const raw = window.localStorage.getItem(WEB_PLAYER_STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as { queue?: Partial<QueueState>; position?: number };
+    const items = saved.queue?.items;
+    const index = saved.queue?.index;
+    if (!Array.isArray(items) || !items.every(isTrack)
+      || !Number.isInteger(index) || index === undefined || index < 0 || index >= items.length) {
+      window.localStorage.removeItem(WEB_PLAYER_STORAGE_KEY);
+      return;
+    }
+    const queue: QueueState = { items, index };
+    const recStart = saved.queue?.recStart;
+    if (Number.isInteger(recStart) && recStart !== undefined && recStart >= 0 && recStart < items.length) {
+      queue.recStart = recStart;
+    }
+    restoredPosition = Number.isFinite(saved.position) ? Math.max(0, saved.position ?? 0) : 0;
+    store().set({ queue, status: 'paused', error: null });
+  } catch {
+    window.localStorage.removeItem(WEB_PLAYER_STORAGE_KEY);
+  }
+}
+
+usePlayerStore.subscribe((state, previous) => {
+  if (state.queue !== previous.queue) persistWebQueue(state.queue);
+});
 
 export function getWebAudioElement(): HTMLAudioElement {
   return getAudio();
@@ -58,6 +123,12 @@ function attachAudioEvents(): void {
     if (store().status === 'playing') store().set({ status: 'buffering' });
   });
   audio.addEventListener('playing', () => store().set({ status: 'playing', error: null }));
+  audio.addEventListener('timeupdate', () => {
+    const now = Date.now();
+    if (now - lastPositionPersistAt < 5000) return;
+    lastPositionPersistAt = now;
+    persistWebQueue();
+  });
   audio.addEventListener('ended', () => { void onAudioEnded(); });
   audio.addEventListener('error', () => {
     if (store().status !== 'loading') {
@@ -72,7 +143,7 @@ export function setSleepTimer(minutes: number): void {
   }
   cancelSleepTimer();
   const endAt = Date.now() + minutes * 60_000;
-  store().set({ sleepTimerEndsAt: endAt });
+  store().set({ sleepTimerEndsAt: endAt, sleepTimerPreset: minutes });
   const checkTimer = () => {
     if (store().sleepTimerEndsAt !== endAt) return;
     const remaining = endAt - Date.now();
@@ -82,15 +153,21 @@ export function setSleepTimer(minutes: number): void {
     }
     sleepTimer = null;
     getAudio().pause();
-    store().set({ sleepTimerEndsAt: null, status: 'paused' });
+    store().set({ sleepTimerEndsAt: null, sleepTimerPreset: null, status: 'paused' });
   };
   checkTimer();
+}
+
+export function setSleepTimerAtTrackEnd(): void {
+  if (sleepTimer) clearTimeout(sleepTimer);
+  sleepTimer = null;
+  store().set({ sleepTimerEndsAt: null, sleepTimerPreset: 'trackEnd' });
 }
 
 export function cancelSleepTimer(): void {
   if (sleepTimer) clearTimeout(sleepTimer);
   sleepTimer = null;
-  store().set({ sleepTimerEndsAt: null });
+  store().set({ sleepTimerEndsAt: null, sleepTimerPreset: null });
 }
 
 export function setupAudio(): Promise<void> {
@@ -109,6 +186,8 @@ export function setupAudio(): Promise<void> {
 
 export async function restoreNativeQueue(): Promise<void> {
   await setupAudio();
+  restoreWebQueue();
+  requestRecommendationsIfEnabled();
 }
 
 async function recordHistory(track: Track): Promise<void> {
@@ -127,13 +206,26 @@ function prefetchNext(): void {
 async function maybeFillQueue(): Promise<void> {
   const { queue, repeat } = store();
   const track = currentOf(queue);
-  if (repeat !== 'off' || !track || track.source !== 'youtube') return;
-  const related = await catalog.getRelated(track);
-  const current = store();
-  if (current.repeat !== 'off' || currentOf(current.queue)?.id !== track.id) return;
-  const known = new Set(current.queue.items.map((item) => item.id));
-  const fresh = related.filter((item) => !known.has(item.id));
-  if (fresh.length) store().set({ queue: appendRecommended(current.queue, fresh) });
+  if ((repeat !== 'off' && repeat !== 'all') || queue.recStart !== undefined || !track || track.source !== 'youtube') return;
+  if (recommendationRequestTrackId === track.id) return;
+  recommendationRequestTrackId = track.id;
+  try {
+    const related = await catalog.getRelated(track);
+    const current = store();
+    if ((current.repeat !== 'off' && current.repeat !== 'all')
+      || current.queue.recStart !== undefined
+      || currentOf(current.queue)?.id !== track.id) return;
+    const known = new Set(current.queue.items.map((item) => item.id));
+    const fresh = related.filter((item) => !known.has(item.id));
+    if (fresh.length) store().set({ queue: appendRecommended(current.queue, fresh) });
+  } finally {
+    if (recommendationRequestTrackId === track.id) recommendationRequestTrackId = null;
+  }
+}
+
+function requestRecommendationsIfEnabled(): void {
+  const { repeat } = store();
+  if (repeat === 'off' || repeat === 'all') void maybeFillQueue().catch(() => {});
 }
 
 async function loadAndPlay(track: Track, startAt = 0): Promise<void> {
@@ -199,9 +291,13 @@ async function loadAndPlay(track: Track, startAt = 0): Promise<void> {
   }
 }
 
-export async function playQueue(tracks: Track[], startIndex = 0): Promise<void> {
-  const queue = setQueue(tracks, startIndex);
-  store().set({ queue });
+export async function playQueue(tracks: Track[], startIndex = 0, shuffle?: boolean): Promise<void> {
+  const enabled = shuffle ?? store().shuffle;
+  let queue = setQueue(tracks, startIndex);
+  if (shuffle === true) queue = shuffleAll(queue);
+  else if (enabled) queue = shuffleRest(queue);
+  store().set({ queue, shuffle: enabled });
+  requestRecommendationsIfEnabled();
   const track = currentOf(queue);
   if (track) await loadAndPlay(track);
 }
@@ -247,11 +343,21 @@ export async function togglePlay(): Promise<void> {
   const timerEndAt = store().sleepTimerEndsAt;
   if (timerEndAt !== null && Date.now() >= timerEndAt) {
     getAudio().pause();
-    store().set({ sleepTimerEndsAt: null, status: 'paused' });
+    store().set({ sleepTimerEndsAt: null, sleepTimerPreset: null, status: 'paused' });
     return;
   }
   const { status, queue } = store();
   if (status === 'loading' || status === 'buffering') return;
+  const audio = getAudio();
+  if (status === 'paused' && !audio.currentSrc) {
+    const track = currentOf(queue);
+    if (track) {
+      const position = restoredPosition;
+      restoredPosition = 0;
+      await loadAndPlay(track, position);
+    }
+    return;
+  }
   if (status === 'error' || status === 'idle') {
     const track = currentOf(queue);
     if (track) await loadAndPlay(track, getAudio().currentTime || 0);
@@ -287,6 +393,7 @@ export async function stop(): Promise<void> {
 export function addToQueueNext(track: Track): void {
   const wasEmpty = store().queue.items.length === 0;
   store().set({ queue: qPlayNext(store().queue, track) });
+  requestRecommendationsIfEnabled();
   if (wasEmpty) void loadAndPlay(track);
   else prefetchNext();
 }
@@ -294,6 +401,7 @@ export function addToQueueNext(track: Track): void {
 export function addToQueueEnd(tracks: Track[]): void {
   const wasEmpty = store().queue.items.length === 0;
   store().set({ queue: qEnqueue(store().queue, tracks) });
+  requestRecommendationsIfEnabled();
   if (wasEmpty && tracks[0]) void loadAndPlay(tracks[0]);
   else prefetchNext();
 }
@@ -312,14 +420,26 @@ export async function removeFromQueue(index: number): Promise<void> {
   }
 }
 
-export function shuffleUpcoming(): void {
-  store().set({ queue: shuffleRest(store().queue) });
+export async function reorderQueue(from: number, to: number): Promise<void> {
+  const queue = store().queue;
+  const nextQueue = moveQueueItem(queue, from, to);
+  if (nextQueue === queue) return;
+  store().set({ queue: nextQueue });
+  prefetchNext();
+}
+
+export function toggleShuffle(): void {
+  const { queue, shuffle } = store();
+  store().set({
+    queue: shuffle ? restoreShuffleOrder(queue) : shuffleRest(queue),
+    shuffle: !shuffle,
+  });
   prefetchNext();
 }
 
 export async function setRepeat(mode: RepeatMode): Promise<void> {
   store().set({ repeat: mode });
-  if (mode !== 'off') store().set({ queue: dropRecommended(store().queue) });
+  requestRecommendationsIfEnabled();
   prefetchNext();
   try {
     await settingsRepo.saveSetting(await getDb(), 'repeatMode', mode);
@@ -331,6 +451,10 @@ export async function setRepeat(mode: RepeatMode): Promise<void> {
 async function onAudioEnded(): Promise<void> {
   const track = currentOf(store().queue);
   if (!track) return;
+  if (store().sleepTimerPreset === 'trackEnd') {
+    store().set({ sleepTimerEndsAt: null, sleepTimerPreset: null, status: 'paused' });
+    return;
+  }
   if (store().repeat === 'one') {
     const audio = getAudio();
     audio.currentTime = 0;

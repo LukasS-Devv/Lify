@@ -87,10 +87,11 @@ test('nextIndex honours repeat modes', () => {
   assert.equal(nextIndex(emptyQueue, 'all', true), null);
 });
 
-test('recommendations are fetched only when an online queue ends without repeat', () => {
+test('recommendations are fetched when an online queue ends in off or all repeat', () => {
   assert.equal(shouldFetchRecommendations({ items, index: 2 }, 'off'), true);
   assert.equal(shouldFetchRecommendations({ items, index: 1 }, 'off'), false);
-  assert.equal(shouldFetchRecommendations({ items, index: 2 }, 'all'), false);
+  assert.equal(shouldFetchRecommendations({ items, index: 2 }, 'all'), true);
+  assert.equal(shouldFetchRecommendations({ items: [...items, track('r1')], index: 3, recStart: 3 }, 'all'), false);
   assert.equal(shouldFetchRecommendations({ items: [{ ...track('local'), source: 'local' }], index: 0 }, 'off'), false);
   assert.equal(shouldFetchRecommendations(emptyQueue, 'off'), false);
 });
@@ -136,12 +137,12 @@ test('removeAt and playNext keep recStart pointing at the first recommendation',
   assert.equal(playNext({ ...q, index: 3 }, track('x')).recStart, 3);
 });
 
-test('repeat all loops the playlist and skips recommendations', () => {
+test('repeat all plays suggestions after the playlist and then loops', () => {
   const q = { items: [...items, track('r1')], index: 2, recStart: 3 };
-  assert.equal(nextIndex(q, 'all', false), 0);
+  assert.equal(nextIndex(q, 'all', false), 3);
   assert.equal(nextIndex({ ...q, index: 3 }, 'all', false), 0);
   assert.equal(nextIndex({ ...q, index: 3 }, 'off', false), null);
-  assert.equal(prevIndex({ ...q, index: 0 }, 'all'), 2);
+  assert.equal(prevIndex({ ...q, index: 0 }, 'all'), 3);
 });
 
 test('reverse repeat stays inside the playlist when recommendations are queued', () => {

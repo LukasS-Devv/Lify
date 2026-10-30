@@ -104,6 +104,7 @@ export default function Settings() {
               void doExport(true);
             }}
             disabled={busy}
+            style={s.dialogButton}
           />
           <Button
             icon="flash-outline"
@@ -114,12 +115,14 @@ export default function Settings() {
               void doExport(false);
             }}
             disabled={busy}
+            style={s.dialogButton}
           />
           <Button
             variant="secondary"
             label={t('common.cancel')}
             onPress={() => setShowExportOptions(false)}
             disabled={busy}
+            style={s.dialogButton}
           />
     </Dialog>
     </>
@@ -160,6 +163,7 @@ function RadioRow({ label, selected, onPress }: { label: string; selected: boole
 
 const s = StyleSheet.create({
   content: { padding: spacing.md, gap: spacing.md, paddingBottom: layout.listBottomPad + spacing.xl },
+  dialogButton: { width: '100%', minHeight: 48, borderRadius: 8 },
   card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, gap: spacing.sm },
   section: { color: colors.text, fontSize: font.lg, fontWeight: '800' },
   hint: { color: colors.textMuted, fontSize: font.sm },

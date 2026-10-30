@@ -30,6 +30,9 @@ export function bumpFavoritesVersion() {
 /** Alterna o favorito e, ao adicionar, mostra o banner com a opção de alterar playlists. */
 export async function toggleFavoriteWithFeedback(track: Track): Promise<boolean> {
   const now = await favoritesRepo.toggleFavorite(await getDb(), track);
-  if (now) useFavoriteFeedbackStore.getState().show(track);
+  useFavoriteFeedbackStore.setState((state) => ({
+    favoritesVersion: state.favoritesVersion + 1,
+    ...(now ? { track, nonce: state.nonce + 1 } : {}),
+  }));
   return now;
 }

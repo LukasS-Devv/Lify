@@ -16,21 +16,25 @@ export function TextPromptModal({ visible, title, initialValue = '', placeholder
 
   return (
     <Dialog visible={visible} onClose={onClose} title={title}>
+      <View style={s.content}>
           <TextInput
             autoFocus value={value} onChangeText={setValue} onSubmitEditing={() => onSubmit(value)}
-            placeholder={placeholder} placeholderTextColor={colors.textFaint} returnKeyType="done" style={s.input}
+            placeholder={placeholder} placeholderTextColor={colors.textFaint} returnKeyType="done" selectionColor={colors.accent} style={s.input}
           />
           {error ? <Text style={s.err}>{error}</Text> : null}
           <View style={s.actions}>
-            <Button label={t('common.cancel')} variant="secondary" onPress={onClose} />
-            <Button label={confirmLabel} onPress={() => onSubmit(value)} />
+            <Button label={t('common.cancel')} variant="secondary" onPress={onClose} style={s.actionButton} />
+            <Button label={confirmLabel} onPress={() => onSubmit(value)} style={s.actionButton} />
           </View>
+      </View>
     </Dialog>
   );
 }
 
 const s = StyleSheet.create({
-  input: { backgroundColor: colors.elevated, color: colors.text, fontSize: font.md, paddingHorizontal: spacing.md, paddingVertical: 12, borderRadius: radius.md },
+  content: { width: '100%', alignSelf: 'stretch', gap: spacing.lg, paddingHorizontal: spacing.xs, paddingBottom: spacing.xs },
+  input: { width: '100%', minWidth: 0, minHeight: 48, alignSelf: 'stretch', backgroundColor: '#242424', color: colors.text, fontSize: font.md, paddingHorizontal: spacing.md, paddingVertical: 12, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md },
   err: { color: colors.danger, fontSize: font.md },
-  actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm },
+  actions: { width: '100%', flexDirection: 'row', alignItems: 'stretch', gap: spacing.sm },
+  actionButton: { flex: 1, minHeight: 48, borderRadius: 8 },
 });

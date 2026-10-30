@@ -149,6 +149,7 @@ export function ImportPlaylistModal({
               onPress={analyze}
               disabled={!url.trim() || saving}
               loading={analyzing}
+              style={s.actionButton}
             />
 
             <View style={s.tip}>
@@ -246,6 +247,7 @@ export function ImportPlaylistModal({
                   onPress={confirm}
                   loading={saving}
                   disabled={saving}
+                  style={s.actionButton}
                 />
               </View>
             ) : null}
@@ -264,13 +266,18 @@ const s = StyleSheet.create({
   },
 
   input: {
-    backgroundColor: colors.elevated,
+    width: '100%',
+    minHeight: 48,
+    backgroundColor: '#242424',
     color: colors.text,
     fontSize: font.md,
     paddingHorizontal: spacing.md,
     paddingVertical: 12,
-    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
   },
+  actionButton: { width: '100%', minHeight: 48, borderRadius: 8 },
 
   tip: {
     backgroundColor: colors.surface,

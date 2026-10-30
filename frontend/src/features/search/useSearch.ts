@@ -4,7 +4,7 @@ import type { CatalogArtist } from '@/services/catalog/types';
 import type { Track } from '@/types';
 import { t } from '@/i18n';
 
-const AUTO_SEARCH_DELAY = 300;
+const AUTO_SEARCH_DELAY = 700;
 
 export function useSearch() {
   const [query, setQueryState] = useState('');
@@ -89,7 +89,7 @@ export function useSearch() {
 
   useEffect(() => {
     const q = query.trim();
-    if (q.length < 2 || lastSubmittedQuery.current === q) return;
+    if (q.length < 2 || query !== query.trimEnd() || lastSubmittedQuery.current === q) return;
 
     const timeout = setTimeout(() => {
       if (lastSubmittedQuery.current !== q) void submit(q);

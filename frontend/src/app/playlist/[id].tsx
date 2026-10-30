@@ -12,7 +12,6 @@ import { addToQueueEnd, playQueue, setRepeat } from '@/services/audio/controller
 import { selectCurrentTrack, usePlayerStore } from '@/services/audio/store';
 import { t, useTranslation } from '@/i18n';
 import type { Track } from '@/types';
-import { shuffled } from '@/utils/array';
 import { gradientFor } from '@/utils/color';
 import { formatTotalDuration } from '@/utils/track';
 import { importLocalAudioToPlaylist } from '@/storage/localAudio';
@@ -23,12 +22,12 @@ import {
 import { moveItem } from '@/utils/moveItem';
 import { colors, font, layout, spacing } from '@/theme/tokens';
 import { requestDialog } from '@/components/OverlayDialogHost';
+import { showToast } from '@/components/overlay';
 
 const COVER = 190;
 
 function showNotice(title: string, message: string): void {
-  void requestDialog({ title, message, confirmLabel: t('common.close') })
-    .catch((error: unknown) => console.error('[playlist] Could not show a dialog', error));
+  showToast(message, { icon: title === t('common.error') ? 'warning-outline' : 'checkmark-circle-outline' });
 }
 
 type PlaylistDownloadStatus = 'queued' | 'downloading' | 'completed' | 'failed' | 'cancelled';
@@ -159,7 +158,11 @@ export default function PlaylistDetail() {
       label: playlist.pinned ? t('playlist.unpin') : t('playlist.pin'),
       onPress: () => void setPinned(!playlist.pinned),
     }] : []),
-    ...(tracks.length ? [{ icon: 'list-outline' as const, label: t('playlist.addToQueue'), onPress: () => addToQueueEnd(tracks) }] : []),
+    ...(tracks.length ? [{
+      icon: 'play-circle-outline' as const,
+      label: t('playlist.addToQueue'),
+      onPress: () => { addToQueueEnd(tracks); showToast(t('actions.queued')); },
+    }] : []),
     ...(downloadQueueRunning
       ? [{
         icon: 'close-circle-outline' as const,
@@ -302,7 +305,7 @@ export default function PlaylistDetail() {
   const meta = [t('common.tracks', { count: tracks.length }), formatTotalDuration(tracks)].filter(Boolean).join(' · ');
   const playPlaylist = async (startIndex: number, shuffledTracks = false) => {
     await setRepeat('off');
-    await playQueue(shuffledTracks ? shuffled(tracks) : tracks, startIndex);
+    await playQueue(tracks, startIndex, shuffledTracks ? true : undefined);
   };
 
   const header = (
